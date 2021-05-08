@@ -1,0 +1,7 @@
+[*]
+# Making sure files are proper text files.
+insert_final_newline = true
+# Superior to Spaces for accessibility reasons.
+indent_style = tab
+# The only proper way of handling Unicode.
+charset = utf-8
