@@ -445,14 +445,9 @@ mod tests {
 	use crate::{CowArcNode, System};
 	use std::sync::Arc;
 
-	pub fn create_test_controller() -> System {
-		let system = System::new();
-		system
-	}
-
 	#[test]
 	fn root_node() {
-		let system = create_test_controller();
+		let system = System::new();
 		system
 			.root()
 			.set_child("noop", |w| NoopNode::new(w))
@@ -475,7 +470,7 @@ mod tests {
 
 	#[test]
 	fn create_remove_nodes() {
-		let system = create_test_controller();
+		let system = System::new();
 		let root = system.root();
 		// Node does not exist yet
 		assert!(root.get_child("/blah").is_none());
