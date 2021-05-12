@@ -1,5 +1,8 @@
 use crate::node_implementation_helpers::*;
+use crate::nodes::file_system::FileSystemFileNode;
+use crate::nodes::noop::NoopNode;
 use crate::{ArcNode, CowArcNode, CowWeakNode, Node, WeakNode};
+use std::borrow::Cow;
 use std::ffi::OsStr;
 use std::path::{Components, PathBuf};
 use std::sync::{Arc, RwLock, Weak};
@@ -12,12 +15,21 @@ pub struct FileSystemDirectoryNode {
 	read_only: bool,
 }
 
+#[derive(Debug)]
+pub struct FileSystemCreateDirectory;
+
+#[derive(Debug)]
+pub struct FileSystemCreateFile {
+	content: Cow<'static, str>,
+}
+
 enum Either<L, R> {
 	Left(L),
 	Right(R),
 }
 
 impl FileSystemDirectoryNode {
+	#[allow(clippy::new_ret_no_self)]
 	pub fn new(parent: WeakNode, root_path: PathBuf, read_only: bool) -> ArcNode {
 		let self_arc = Arc::new(Self {
 			this: RwLock::new(Weak::<Self>::new()),
@@ -28,6 +40,14 @@ impl FileSystemDirectoryNode {
 		let weak = Arc::downgrade(&self_arc);
 		*self_arc.this.write().expect("impossible?") = weak;
 		self_arc
+	}
+
+	pub fn create_dir() -> ArcNode {
+		Arc::new(FileSystemCreateDirectory)
+	}
+
+	pub fn create_file(content: Cow<'static, str>) -> ArcNode {
+		Arc::new(FileSystemCreateFile { content })
 	}
 
 	fn get_node_or_path<
@@ -97,10 +117,14 @@ impl Node for FileSystemDirectoryNode {
 					Some(CowArcNode::Owned(FileSystemDirectoryNode::new(
 						self.this.read().expect("poisoned lock").clone(),
 						path,
-						self.read_only.clone(),
+						self.read_only,
 					)))
 				} else if path.is_file() {
-					todo!()
+					Some(CowArcNode::Owned(FileSystemFileNode::new(
+						self.this.read().expect("poisoned lock").clone(),
+						path,
+						self.read_only,
+					)))
 				} else {
 					None
 				}
@@ -139,10 +163,13 @@ impl Node for FileSystemDirectoryNode {
 					return Err("node already exists");
 				}
 				let node = constructor(self.this.read().expect("poisoned lock").clone());
-				if let Ok(_fsd) = node.downcast_ref::<FileSystemDirectoryNode>() {
+				if let Ok(_fsd) = node.downcast_ref::<FileSystemCreateDirectory>() {
 					std::fs::create_dir(path).map_err(|_e| "failed creating directory")
+				} else if let Ok(fsf) = node.downcast_ref::<FileSystemCreateFile>() {
+					std::fs::write(path, fsf.content.as_ref())
+						.map_err(|_e| "failed writing to file")
 				} else {
-					todo!("create FileSystemFileNode")
+					Err("invalid node type for filesystem child")
 				}
 			}
 		}
@@ -185,6 +212,60 @@ impl Node for FileSystemDirectoryNode {
 	}
 }
 
+impl Node for FileSystemCreateDirectory {
+	fn get_child_node_at(&self, _name: &OsStr, _components: &mut Components) -> Option<CowArcNode> {
+		None
+	}
+
+	fn get_parent_node(&self) -> CowWeakNode {
+		CowWeakNode::Owned(Weak::<NoopNode>::new())
+	}
+
+	fn set_child_node_at(
+		&self,
+		_name: &OsStr,
+		_components: &mut Components,
+		_constructor: &mut dyn FnMut(WeakNode) -> ArcNode,
+	) -> Result<(), &'static str> {
+		Err("this is a tag node, do not directly use")
+	}
+
+	fn remove_child_node_at(
+		&self,
+		_name: &OsStr,
+		_components: &mut Components,
+	) -> Result<(), &'static str> {
+		Err("this is a tag node, do not directly use")
+	}
+}
+
+impl Node for FileSystemCreateFile {
+	fn get_child_node_at(&self, _name: &OsStr, _components: &mut Components) -> Option<CowArcNode> {
+		None
+	}
+
+	fn get_parent_node(&self) -> CowWeakNode {
+		CowWeakNode::Owned(Weak::<NoopNode>::new())
+	}
+
+	fn set_child_node_at(
+		&self,
+		_name: &OsStr,
+		_components: &mut Components,
+		_constructor: &mut dyn FnMut(WeakNode) -> ArcNode,
+	) -> Result<(), &'static str> {
+		Err("this is a tag node, do not directly use as a normal node")
+	}
+
+	fn remove_child_node_at(
+		&self,
+		_name: &OsStr,
+		_components: &mut Components,
+	) -> Result<(), &'static str> {
+		Err("this is a tag node, do not directly use as a normal node")
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use crate::nodes::file_system::FileSystemDirectoryNode;
@@ -218,9 +299,7 @@ mod tests {
 			.is_none());
 		// Create directory
 		debug
-			.set_child("test_dir", |p| {
-				FileSystemDirectoryNode::new(p, "".into(), false)
-			})
+			.set_child("test_dir", |_p| FileSystemDirectoryNode::create_dir())
 			.unwrap();
 		// Verify that created directory exists
 		assert!(system
