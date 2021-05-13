@@ -11,7 +11,7 @@ pub use crate::scheme::Scheme;
 pub use crate::schemes::*;
 pub use errors::*;
 
-use crate::node::CowArcNode;
+use crate::scheme::NodeGetOptions;
 use std::borrow::Cow;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
@@ -91,13 +91,21 @@ impl Vfs {
 			})
 	}
 
-	pub async fn get_node<'s, 'a>(&'s self, url: &'a Url) -> Result<Box<dyn Node>, VfsError<'a>> {
+	pub async fn get_node<'s, 'a>(
+		&'s self,
+		url: &'a Url,
+		options: NodeGetOptions,
+	) -> Result<Box<dyn Node>, VfsError<'a>> {
 		let scheme = self.get_scheme(url.scheme())?;
-		Ok(scheme.get_node(&url).await?)
+		Ok(scheme.get_node(&url, options).await?)
 	}
 
-	pub async fn get_node_at<'s>(&'s self, uri: &str) -> Result<Box<dyn Node>, VfsError<'static>> {
-		self.get_node(&Url::parse(uri)?)
+	pub async fn get_node_at<'s>(
+		&'s self,
+		uri: &str,
+		options: NodeGetOptions,
+	) -> Result<Box<dyn Node>, VfsError<'static>> {
+		self.get_node(&Url::parse(uri)?, options)
 			.await
 			.map_err(VfsError::into_owned)
 	}
@@ -105,7 +113,6 @@ impl Vfs {
 
 #[cfg(test)]
 pub(crate) mod tests {
-	use crate::node::CowArcNode;
 	pub use crate::*;
 
 	#[test]
@@ -124,8 +131,10 @@ pub(crate) mod tests {
 	#[tokio::test]
 	async fn node_access() {
 		let mut vfs = Vfs::with_capacity(10);
-		vfs.add_default_schemes();
-		vfs.get_node_at("data:blah").await.unwrap();
+		vfs.add_default_schemes().unwrap();
+		vfs.get_node_at("data:blah", NodeGetOptions::new().read(true))
+			.await
+			.unwrap();
 	}
 }
 

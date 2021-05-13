@@ -1,14 +1,11 @@
-use crate::{as_any_cast, NodeError};
-use std::borrow::Cow;
-use std::future::Future;
-use std::marker::PhantomData;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{Context, Poll};
-use tokio::io::{AsyncRead, AsyncWrite};
+use crate::as_any_cast;
+use tokio::io::{AsyncRead, AsyncSeek, AsyncWrite, ReadHalf, WriteHalf};
 
-pub type CowArcNode<'a> = Cow<'a, ArcNode>;
-pub type ArcNode = Arc<dyn Node>;
+// pub type CowArcNode<'a> = Cow<'a, ArcNode>;
+// pub type ArcNode = Arc<dyn Node>;
+
+pub trait AsyncReadWriteUnpin: AsyncRead + AsyncWrite + Unpin {}
+impl<T> AsyncReadWriteUnpin for T where T: AsyncRead + AsyncWrite + Unpin {}
 
 // TODO:  Should we go through the overwhelming pain to make alloc-less async traits?
 // Can follow tokio's model, maybe a crate like`async-trait-ext` can help, or just do it manually?
@@ -20,6 +17,14 @@ pub trait Node: as_any_cast::AsAnyCast + Send + Sync + 'static {
 	// ) -> Poll<Option<Pin<Box<dyn AsyncRead + Unpin + 'static>>>>;
 	//async fn read<'s>(&'s mut self) -> Option<Pin<Box<dyn AsyncRead + Unpin + 's>>>;
 	async fn read<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncRead + Unpin)>;
+	async fn write<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncWrite + Unpin)>;
+	async fn read_write<'s>(
+		&'s mut self,
+	) -> Option<(
+		ReadHalf<&'s mut dyn AsyncReadWriteUnpin>,
+		WriteHalf<&'s mut dyn AsyncReadWriteUnpin>,
+	)>;
+	async fn seek<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncSeek + Unpin)>;
 	// async fn open_write(&self) -> Option<Pin<Box<dyn AsyncWrite + Unpin>>>;
 }
 
@@ -56,6 +61,6 @@ pub(crate) mod tests {
 	#[test]
 	fn node_access() {
 		let mut vfs = Vfs::with_capacity(10);
-		vfs.add_default_schemes();
+		vfs.add_default_schemes().unwrap();
 	}
 }
