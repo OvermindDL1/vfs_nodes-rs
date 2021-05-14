@@ -1,9 +1,11 @@
-use crate::node::AsyncReadWriteUnpin;
 use crate::scheme::NodeGetOptions;
 use crate::{Node, NodeError, Scheme, SchemeError};
 use std::borrow::Cow;
-use std::io::Cursor;
-use tokio::io::{AsyncRead, AsyncSeek, AsyncWrite, ReadHalf, WriteHalf};
+use std::io::SeekFrom;
+// use tokio::io::{AsyncRead, AsyncSeek, AsyncWrite, ReadHalf, WriteHalf};
+use futures_io::{AsyncRead, AsyncSeek, AsyncWrite};
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use url::Url;
 
 #[derive(Debug)]
@@ -62,7 +64,8 @@ impl Scheme for DataLoaderScheme {
 		};
 
 		let node = DataLoaderNode {
-			data: Cursor::new(data.into_boxed_slice()),
+			data: data.into_boxed_slice(),
+			cursor: 0,
 			//mimetype: mimetype.to_owned(),
 		};
 		Ok(Box::new(node))
@@ -75,38 +78,97 @@ impl Scheme for DataLoaderScheme {
 
 pub struct DataLoaderNode {
 	//mimetype: String,
-	data: Cursor<Box<[u8]>>,
+	data: Box<[u8]>,
+	cursor: usize,
 }
 
 #[async_trait::async_trait]
 impl Node for DataLoaderNode {
 	async fn read<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncRead + Unpin)> {
-		Some(&mut self.data)
+		Some(self)
 	}
 
 	async fn write<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncWrite + Unpin)> {
 		None
 	}
 
-	async fn read_write<'s>(
-		&'s mut self,
-	) -> Option<(
-		ReadHalf<&'s mut dyn AsyncReadWriteUnpin>,
-		WriteHalf<&'s mut dyn AsyncReadWriteUnpin>,
-	)> {
-		None
-	}
+	// async fn read_write<'s>(
+	// 	&'s mut self,
+	// ) -> Option<(
+	// 	ReadHalf<&'s mut dyn AsyncReadWriteUnpin>,
+	// 	WriteHalf<&'s mut dyn AsyncReadWriteUnpin>,
+	// )> {
+	// 	None
+	// }
 
 	async fn seek<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncSeek + Unpin)> {
-		Some(&mut self.data)
+		Some(self)
+	}
+}
+
+impl AsyncRead for DataLoaderNode {
+	fn poll_read(
+		mut self: Pin<&mut Self>,
+		_cx: &mut Context<'_>,
+		buf: &mut [u8],
+	) -> Poll<std::io::Result<usize>> {
+		if self.cursor > self.data.len() {
+			return Poll::Ready(Ok(0));
+		}
+
+		let amt = std::cmp::min(self.data.len() - self.cursor, buf.len());
+		buf[..amt].copy_from_slice(&self.data[self.cursor..(self.cursor + amt)]);
+		self.cursor += amt;
+
+		Poll::Ready(Ok(amt))
+	}
+}
+
+impl AsyncSeek for DataLoaderNode {
+	fn poll_seek(
+		mut self: Pin<&mut Self>,
+		_cx: &mut Context<'_>,
+		pos: SeekFrom,
+	) -> Poll<std::io::Result<u64>> {
+		match pos {
+			SeekFrom::Start(pos) => {
+				if pos > self.data.len() as u64 {
+					self.cursor = self.data.len();
+				} else {
+					self.cursor = pos as usize;
+				}
+			}
+			SeekFrom::End(end_pos) => {
+				if end_pos > 0 {
+					self.cursor = self.data.len();
+				} else if (-end_pos) as usize > self.data.len() {
+					self.cursor = 0;
+				} else {
+					self.cursor = self.data.len() - ((-end_pos) as usize);
+				}
+			}
+			SeekFrom::Current(offset) => {
+				let new_cur = self.cursor as i64 + offset;
+				if new_cur < 0 {
+					self.cursor = 0;
+				} else if new_cur as usize > self.data.len() {
+					self.cursor = self.data.len();
+				} else {
+					self.cursor = new_cur as usize;
+				}
+			}
+		};
+		Poll::Ready(Ok(self.cursor as u64))
 	}
 }
 
 #[cfg(test)]
-mod tests {
+#[cfg(feature = "async-tokio")]
+mod async_tokio_tests {
 	use crate::scheme::NodeGetOptions;
 	use crate::{DataLoaderScheme, Scheme, Vfs};
 	use tokio::io::AsyncReadExt;
+	use tokio_util::compat::FuturesAsyncReadCompatExt;
 	use url::Url;
 
 	fn u(s: &str) -> Url {
@@ -154,7 +216,7 @@ mod tests {
 				.unwrap();
 			let reader = node.read().await.unwrap();
 			let mut buffer = String::new();
-			reader.read_to_string(&mut buffer).await.unwrap();
+			reader.compat().read_to_string(&mut buffer).await.unwrap();
 			assert_eq!(&buffer, "test");
 		}
 		{
@@ -168,6 +230,7 @@ mod tests {
 				.read()
 				.await
 				.unwrap()
+				.compat()
 				.read_to_string(&mut buffer)
 				.await
 				.unwrap();

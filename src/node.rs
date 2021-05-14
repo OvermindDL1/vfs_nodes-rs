@@ -1,5 +1,6 @@
 use crate::as_any_cast;
-use tokio::io::{AsyncRead, AsyncSeek, AsyncWrite, ReadHalf, WriteHalf};
+use futures_io::{AsyncRead, AsyncSeek, AsyncWrite};
+//use tokio::io::{AsyncRead, AsyncSeek, AsyncWrite, ReadHalf, WriteHalf};
 
 // pub type CowArcNode<'a> = Cow<'a, ArcNode>;
 // pub type ArcNode = Arc<dyn Node>;
@@ -18,12 +19,12 @@ pub trait Node: as_any_cast::AsAnyCast + Send + Sync + 'static {
 	//async fn read<'s>(&'s mut self) -> Option<Pin<Box<dyn AsyncRead + Unpin + 's>>>;
 	async fn read<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncRead + Unpin)>;
 	async fn write<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncWrite + Unpin)>;
-	async fn read_write<'s>(
-		&'s mut self,
-	) -> Option<(
-		ReadHalf<&'s mut dyn AsyncReadWriteUnpin>,
-		WriteHalf<&'s mut dyn AsyncReadWriteUnpin>,
-	)>;
+	// async fn read_write<'s>(
+	// 	&'s mut self,
+	// ) -> Option<(
+	// 	ReadHalf<&'s mut dyn AsyncReadWriteUnpin>,
+	// 	WriteHalf<&'s mut dyn AsyncReadWriteUnpin>,
+	// )>;
 	async fn seek<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncSeek + Unpin)>;
 	// async fn open_write(&self) -> Option<Pin<Box<dyn AsyncWrite + Unpin>>>;
 }

@@ -1,40 +1,41 @@
-use crate::node::AsyncReadWriteUnpin;
 use crate::scheme::NodeGetOptions;
 use crate::{Node, Scheme, SchemeError};
 use std::borrow::Cow;
 use std::path::PathBuf;
 use tokio::fs::OpenOptions;
-use tokio::io::{AsyncRead, AsyncSeek, AsyncWrite, ReadHalf, WriteHalf};
+// use tokio::io::{AsyncRead, AsyncSeek, AsyncWrite, ReadHalf, WriteHalf};
+use futures_io::{AsyncRead, AsyncSeek, AsyncWrite};
+use tokio_util::compat::{Compat, TokioAsyncReadCompatExt};
 use url::Url;
 
 #[derive(Debug)]
-pub enum FileSystemError {
+pub enum TokioFileSystemError {
 	Base64Failure(base64::DecodeError),
 }
 
-impl std::fmt::Display for FileSystemError {
+impl std::fmt::Display for TokioFileSystemError {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
-			FileSystemError::Base64Failure(_source) => f.write_str("base64 error"),
+			TokioFileSystemError::Base64Failure(_source) => f.write_str("base64 error"),
 		}
 	}
 }
 
-impl std::error::Error for FileSystemError {
+impl std::error::Error for TokioFileSystemError {
 	fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
 		match self {
-			FileSystemError::Base64Failure(source) => Some(source),
+			TokioFileSystemError::Base64Failure(source) => Some(source),
 		}
 	}
 }
 
 // TODO:  Maybe put all path lookups in a hashmap or btree or so with values as the weak node
 // TODO:  then lock it on reading/writing?
-pub struct FileSystemScheme {
+pub struct TokioFileSystemScheme {
 	root_path: PathBuf,
 }
 
-impl FileSystemScheme {
+impl TokioFileSystemScheme {
 	pub fn new(root_path: impl Into<PathBuf>) -> Self {
 		Self {
 			root_path: root_path.into(),
@@ -53,7 +54,7 @@ impl FileSystemScheme {
 }
 
 #[async_trait::async_trait]
-impl Scheme for FileSystemScheme {
+impl Scheme for TokioFileSystemScheme {
 	async fn get_node<'a>(
 		&self,
 		url: &'a Url,
@@ -67,7 +68,9 @@ impl Scheme for FileSystemScheme {
 			tokio::fs::create_dir_all(parent_path).await?;
 		}
 		let file = OpenOptions::from(options).open(path).await?;
-		let node = FileSystemNode { file };
+		let node = FileSystemNode {
+			file: file.compat(),
+		};
 		Ok(Box::new(node))
 	}
 
@@ -89,7 +92,7 @@ impl Scheme for FileSystemScheme {
 }
 
 pub struct FileSystemNode {
-	file: tokio::fs::File,
+	file: Compat<tokio::fs::File>,
 }
 
 #[async_trait::async_trait]
@@ -102,25 +105,27 @@ impl Node for FileSystemNode {
 		Some(&mut self.file)
 	}
 
-	async fn read_write<'s>(
-		&'s mut self,
-	) -> Option<(
-		ReadHalf<&'s mut dyn AsyncReadWriteUnpin>,
-		WriteHalf<&'s mut dyn AsyncReadWriteUnpin>,
-	)> {
-		Some(tokio::io::split(&mut self.file))
-	}
+	// async fn read_write<'s>(
+	// 	&'s mut self,
+	// ) -> Option<(
+	// 	ReadHalf<&'s mut dyn AsyncReadWriteUnpin>,
+	// 	WriteHalf<&'s mut dyn AsyncReadWriteUnpin>,
+	// )> {
+	// 	Some(tokio::io::split(&mut self.file))
+	// }
 
 	async fn seek<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncSeek + Unpin)> {
-		Some(&mut self.file)
+		// Some(&mut self.file)
+		None
 	}
 }
 
 #[cfg(test)]
 mod tests {
 	use crate::scheme::NodeGetOptions;
-	use crate::{FileSystemScheme, Scheme, Vfs};
-	use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, SeekFrom};
+	use crate::{Scheme, TokioFileSystemScheme, Vfs};
+	use tokio::io::{AsyncReadExt, AsyncWriteExt};
+	use tokio_util::compat::{FuturesAsyncReadCompatExt, FuturesAsyncWriteCompatExt};
 	use url::Url;
 
 	fn u(s: &str) -> Url {
@@ -129,7 +134,8 @@ mod tests {
 
 	#[tokio::test]
 	async fn scheme_access() {
-		let scheme: &mut dyn Scheme = &mut FileSystemScheme::new(std::env::current_dir().unwrap());
+		let scheme: &mut dyn Scheme =
+			&mut TokioFileSystemScheme::new(std::env::current_dir().unwrap());
 		assert!(
 			scheme
 				.get_node(&u("fs:/Cargo.toml"), NodeGetOptions::new().read(true))
@@ -148,14 +154,15 @@ mod tests {
 
 	#[tokio::test]
 	async fn node_reading_scheme() {
-		let scheme: &mut dyn Scheme = &mut FileSystemScheme::new(std::env::current_dir().unwrap());
+		let scheme: &mut dyn Scheme =
+			&mut TokioFileSystemScheme::new(std::env::current_dir().unwrap());
 		let mut node = scheme
 			.get_node(&u("fs:/Cargo.toml"), NodeGetOptions::new().read(true))
 			.await
 			.unwrap();
 		let reader = node.read().await.unwrap();
 		let mut buffer = String::new();
-		reader.read_to_string(&mut buffer).await.unwrap();
+		reader.compat().read_to_string(&mut buffer).await.unwrap();
 		assert!(buffer.starts_with("[package]"));
 	}
 
@@ -164,7 +171,7 @@ mod tests {
 		let mut vfs = Vfs::default();
 		vfs.add_scheme(
 			"fs".to_owned(),
-			FileSystemScheme::new(std::env::current_dir().unwrap()),
+			TokioFileSystemScheme::new(std::env::current_dir().unwrap()),
 		)
 		.unwrap();
 		let mut node = vfs
@@ -175,6 +182,7 @@ mod tests {
 		node.read()
 			.await
 			.unwrap()
+			.compat()
 			.read_to_string(&mut buffer)
 			.await
 			.unwrap();
@@ -184,7 +192,7 @@ mod tests {
 	#[tokio::test]
 	async fn node_writing() {
 		let scheme: &mut dyn Scheme =
-			&mut FileSystemScheme::new(std::env::current_dir().unwrap().join("target"));
+			&mut TokioFileSystemScheme::new(std::env::current_dir().unwrap().join("target"));
 		let mut node = scheme
 			.get_node(
 				&u("fs:/test_node_writing.txt"),
@@ -198,16 +206,29 @@ mod tests {
 			.await
 			.unwrap();
 		let writer = node.write().await.unwrap();
-		writer.write_all("test content".as_bytes()).await.unwrap();
-		node.seek()
+		writer
+			.compat_write()
+			.write_all("test content".as_bytes())
 			.await
-			.unwrap()
-			.seek(SeekFrom::Start(0))
+			.unwrap();
+		// Close and re-open file because tokio-util::compat doesn't have a Compat with AsyncSeek...
+		// node.seek()
+		// 	.await
+		// 	.unwrap()
+		// 	.compat()
+		// 	.seek(SeekFrom::Start(0))
+		// 	.await
+		// 	.unwrap();
+		let mut node = scheme
+			.get_node(
+				&u("fs:/test_node_writing.txt"),
+				NodeGetOptions::new().read(true),
+			)
 			.await
 			.unwrap();
 		let reader = node.read().await.unwrap();
 		let mut buffer = String::new();
-		reader.read_to_string(&mut buffer).await.unwrap();
+		reader.compat().read_to_string(&mut buffer).await.unwrap();
 		scheme
 			.remove_node(&u("fs:/test_node_writing.txt"), false)
 			.await

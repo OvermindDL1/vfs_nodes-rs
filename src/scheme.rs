@@ -86,7 +86,7 @@ impl NodeGetOptions {
 	}
 }
 
-// #[cfg(feature = "fs")]
+#[cfg(feature = "async-tokio")]
 impl From<NodeGetOptions> for tokio::fs::OpenOptions {
 	fn from(opts: NodeGetOptions) -> Self {
 		let mut opener = tokio::fs::OpenOptions::new();

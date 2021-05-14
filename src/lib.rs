@@ -127,6 +127,13 @@ pub(crate) mod tests {
 		let _: &DataLoaderScheme = vfs.get_scheme_as::<DataLoaderScheme>("data").unwrap();
 		let _: &mut DataLoaderScheme = vfs.get_scheme_mut_as::<DataLoaderScheme>("data").unwrap();
 	}
+}
+
+#[cfg(test)]
+#[cfg(feature = "async-tokio")]
+mod tests_async_tokio {
+	use crate::scheme::NodeGetOptions;
+	use crate::Vfs;
 
 	#[tokio::test]
 	async fn node_access() {

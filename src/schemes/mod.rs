@@ -1,5 +1,7 @@
 pub mod data_loader;
+#[cfg(feature = "async-tokio")]
 pub mod filesystem;
 
 pub use data_loader::DataLoaderScheme;
-pub use filesystem::FileSystemScheme;
+#[cfg(feature = "async-tokio")]
+pub use filesystem::TokioFileSystemScheme;
