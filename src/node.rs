@@ -1,5 +1,5 @@
 use crate::as_any_cast;
-use futures_io::{AsyncRead, AsyncSeek, AsyncWrite};
+use futures_lite::{AsyncRead, AsyncSeek, AsyncWrite};
 //use tokio::io::{AsyncRead, AsyncSeek, AsyncWrite, ReadHalf, WriteHalf};
 
 // pub type CowArcNode<'a> = Cow<'a, ArcNode>;
@@ -61,7 +61,7 @@ pub(crate) mod tests {
 
 	#[test]
 	fn node_access() {
-		let mut vfs = Vfs::with_capacity(10);
+		let mut vfs = Vfs::empty_with_capacity(10);
 		vfs.add_default_schemes().unwrap();
 	}
 }

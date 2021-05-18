@@ -23,7 +23,7 @@ pub struct Vfs {
 
 impl Default for Vfs {
 	fn default() -> Self {
-		let mut vfs = Self::with_capacity(10);
+		let mut vfs = Self::empty_with_capacity(10);
 		vfs.add_default_schemes()
 			.expect("failed adding default schemes to an empty VFS");
 		vfs
@@ -31,7 +31,11 @@ impl Default for Vfs {
 }
 
 impl Vfs {
-	pub fn with_capacity(capacity: usize) -> Self {
+	pub fn empty() -> Self {
+		Self::empty_with_capacity(0)
+	}
+
+	pub fn empty_with_capacity(capacity: usize) -> Self {
 		Self {
 			schemes: HashMap::with_capacity(capacity),
 		}
@@ -45,9 +49,10 @@ impl Vfs {
 
 	pub fn add_scheme(
 		&mut self,
-		scheme_name: String,
+		scheme_name: impl Into<String>,
 		scheme: impl Scheme,
 	) -> Result<&mut Self, VfsError<'static>> {
+		let scheme_name = scheme_name.into();
 		match self.schemes.entry(scheme_name.clone()) {
 			Entry::Occupied(_entry) => Err(VfsError::SchemeAlreadyExists(scheme_name)),
 			Entry::Vacant(entry) => {
@@ -91,21 +96,34 @@ impl Vfs {
 			})
 	}
 
-	pub async fn get_node<'s, 'a>(
-		&'s self,
+	pub async fn get_node<'a>(
+		&self,
 		url: &'a Url,
-		options: NodeGetOptions,
+		options: &NodeGetOptions,
 	) -> Result<Box<dyn Node>, VfsError<'a>> {
 		let scheme = self.get_scheme(url.scheme())?;
-		Ok(scheme.get_node(&url, options).await?)
+		Ok(scheme.get_node(self, &url, options).await?)
 	}
 
-	pub async fn get_node_at<'s>(
-		&'s self,
+	pub async fn get_node_at(
+		&self,
 		uri: &str,
-		options: NodeGetOptions,
+		options: &NodeGetOptions,
 	) -> Result<Box<dyn Node>, VfsError<'static>> {
 		self.get_node(&Url::parse(uri)?, options)
+			.await
+			.map_err(VfsError::into_owned)
+	}
+
+	pub async fn remove_node<'a>(&self, url: &'a Url, force: bool) -> Result<(), VfsError<'a>> {
+		Ok(self
+			.get_scheme(url.scheme())?
+			.remove_node(self, url, force)
+			.await?)
+	}
+
+	pub async fn remove_node_at(&self, uri: &str, force: bool) -> Result<(), VfsError<'static>> {
+		self.remove_node(&Url::parse(uri)?, force)
 			.await
 			.map_err(VfsError::into_owned)
 	}
@@ -117,7 +135,7 @@ pub(crate) mod tests {
 
 	#[test]
 	fn schema_access() {
-		let mut vfs = Vfs::with_capacity(10);
+		let mut vfs = Vfs::empty_with_capacity(10);
 		assert!(vfs.get_scheme("data").is_err());
 		vfs.add_scheme("data".to_owned(), DataLoaderScheme::default())
 			.unwrap();
@@ -130,18 +148,29 @@ pub(crate) mod tests {
 }
 
 #[cfg(test)]
-#[cfg(feature = "async-tokio")]
+#[cfg(feature = "backend_tokio")]
 mod tests_async_tokio {
 	use crate::scheme::NodeGetOptions;
 	use crate::Vfs;
 
 	#[tokio::test]
 	async fn node_access() {
-		let mut vfs = Vfs::with_capacity(10);
+		let mut vfs = Vfs::empty_with_capacity(10);
 		vfs.add_default_schemes().unwrap();
-		vfs.get_node_at("data:blah", NodeGetOptions::new().read(true))
+		vfs.get_node_at("data:blah", &NodeGetOptions::new().read(true))
 			.await
 			.unwrap();
+	}
+
+	#[tokio::test]
+	async fn node_does_not_exist() {
+		let vfs = Vfs::default();
+		assert!(vfs.get_scheme("nadda").is_err());
+		assert!(vfs
+			.get_node_at("nadda:/nadda", &NodeGetOptions::new())
+			.await
+			.is_err());
+		assert!(vfs.remove_node_at("nadda:/nadda", true).await.is_err());
 	}
 }
 

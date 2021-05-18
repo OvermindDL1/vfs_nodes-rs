@@ -1,7 +1,9 @@
 pub mod data_loader;
-#[cfg(feature = "async-tokio")]
 pub mod filesystem;
+pub mod memory;
+pub mod overlay;
 
-pub use data_loader::DataLoaderScheme;
-#[cfg(feature = "async-tokio")]
-pub use filesystem::TokioFileSystemScheme;
+pub use data_loader::*;
+pub use filesystem::*;
+pub use memory::*;
+pub use overlay::*;

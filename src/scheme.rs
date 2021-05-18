@@ -1,4 +1,4 @@
-use crate::{as_any_cast, Node, SchemeError};
+use crate::{as_any_cast, Node, SchemeError, Vfs};
 use url::Url;
 
 /// This is modeled after `std::fs::OpenOptions`, same definitions for the options.
@@ -86,10 +86,9 @@ impl NodeGetOptions {
 	}
 }
 
-#[cfg(feature = "async-tokio")]
-impl From<NodeGetOptions> for tokio::fs::OpenOptions {
+impl From<NodeGetOptions> for std::fs::OpenOptions {
 	fn from(opts: NodeGetOptions) -> Self {
-		let mut opener = tokio::fs::OpenOptions::new();
+		let mut opener = std::fs::OpenOptions::new();
 		opener
 			.read(opts.read)
 			.write(opts.write)
@@ -101,9 +100,25 @@ impl From<NodeGetOptions> for tokio::fs::OpenOptions {
 	}
 }
 
-impl From<NodeGetOptions> for std::fs::OpenOptions {
-	fn from(opts: NodeGetOptions) -> Self {
-		let mut opener = std::fs::OpenOptions::new();
+#[cfg(feature = "backend_async_std")]
+impl From<&NodeGetOptions> for async_std::fs::OpenOptions {
+	fn from(opts: &NodeGetOptions) -> Self {
+		let mut opener = async_std::fs::OpenOptions::new();
+		opener
+			.read(opts.read)
+			.write(opts.write)
+			.append(opts.append)
+			.truncate(opts.truncate)
+			.create(opts.create)
+			.create_new(opts.create_new);
+		opener
+	}
+}
+
+#[cfg(feature = "backend_tokio")]
+impl From<&NodeGetOptions> for tokio::fs::OpenOptions {
+	fn from(opts: &NodeGetOptions) -> Self {
+		let mut opener = tokio::fs::OpenOptions::new();
 		opener
 			.read(opts.read)
 			.write(opts.write)
@@ -119,10 +134,16 @@ impl From<NodeGetOptions> for std::fs::OpenOptions {
 pub trait Scheme: as_any_cast::AsAnyCast + Sync + 'static {
 	async fn get_node<'a>(
 		&self,
+		vfs: &Vfs,
 		url: &'a Url,
-		options: NodeGetOptions,
+		options: &NodeGetOptions,
 	) -> Result<Box<dyn Node>, SchemeError<'a>>;
-	async fn remove_node<'a>(&self, url: &'a Url, force: bool) -> Result<(), SchemeError<'a>>;
+	async fn remove_node<'a>(
+		&self,
+		vfs: &Vfs,
+		url: &'a Url,
+		force: bool,
+	) -> Result<(), SchemeError<'a>>;
 }
 
 impl dyn Scheme {
@@ -141,7 +162,7 @@ pub(crate) mod tests {
 
 	#[test]
 	fn node_access() {
-		let mut vfs = Vfs::with_capacity(10);
+		let mut vfs = Vfs::empty_with_capacity(10);
 		vfs.add_default_schemes().unwrap();
 	}
 }
