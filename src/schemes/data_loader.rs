@@ -1,32 +1,11 @@
 use crate::scheme::NodeGetOptions;
-use crate::{Node, NodeError, Scheme, SchemeError, Vfs};
+use crate::{Node, Scheme, SchemeError, Vfs};
 use futures_lite::{AsyncRead, AsyncSeek, AsyncWrite};
 use std::borrow::Cow;
 use std::io::SeekFrom;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use url::Url;
-
-#[derive(Debug)]
-pub enum DataLoaderError {
-	Base64Failure(base64::DecodeError),
-}
-
-impl std::fmt::Display for DataLoaderError {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		match self {
-			DataLoaderError::Base64Failure(_source) => f.write_str("base64 error"),
-		}
-	}
-}
-
-impl std::error::Error for DataLoaderError {
-	fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-		match self {
-			DataLoaderError::Base64Failure(source) => Some(source),
-		}
-	}
-}
 
 pub struct DataLoaderScheme {}
 
@@ -54,7 +33,10 @@ impl Scheme for DataLoaderScheme {
 		let (_mimetype, data) = if data_type == "base64" || data_type.ends_with(";base64") {
 			let mimetype = data_type.trim_end_matches("base64").trim_end_matches(';');
 			let data = base64::decode(data).map_err(|source| {
-				NodeError::UnknownError(Box::new(DataLoaderError::Base64Failure(source)))
+				(
+					"data_loader error",
+					Box::new(source) as Box<dyn std::error::Error>,
+				)
 			})?;
 			(mimetype, data)
 		} else {

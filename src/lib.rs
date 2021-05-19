@@ -102,7 +102,7 @@ impl Vfs {
 		options: &NodeGetOptions,
 	) -> Result<Box<dyn Node>, VfsError<'a>> {
 		let scheme = self.get_scheme(url.scheme())?;
-		Ok(scheme.get_node(self, &url, options).await?)
+		Ok(scheme.get_node(self, url, options).await?)
 	}
 
 	pub async fn get_node_at(
@@ -116,10 +116,8 @@ impl Vfs {
 	}
 
 	pub async fn remove_node<'a>(&self, url: &'a Url, force: bool) -> Result<(), VfsError<'a>> {
-		Ok(self
-			.get_scheme(url.scheme())?
-			.remove_node(self, url, force)
-			.await?)
+		let scheme = self.get_scheme(url.scheme())?;
+		Ok(scheme.remove_node(self, url, force).await?)
 	}
 
 	pub async fn remove_node_at(&self, uri: &str, force: bool) -> Result<(), VfsError<'static>> {

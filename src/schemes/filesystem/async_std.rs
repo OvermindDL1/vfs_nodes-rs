@@ -63,7 +63,7 @@ impl Scheme for AsyncStdFileSystemScheme {
 		if options.get_create() {
 			let parent_path = path
 				.parent()
-				.ok_or(SchemeError::URLAccessError(Cow::Borrowed(&url)))?;
+				.ok_or(SchemeError::UrlAccessError(Cow::Borrowed(&url)))?;
 			async_std::fs::create_dir_all(parent_path).await?;
 		}
 		let file = OpenOptions::from(options).open(path).await?;

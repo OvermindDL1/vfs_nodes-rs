@@ -68,7 +68,7 @@ impl Scheme for TokioFileSystemScheme {
 		if options.get_create() {
 			let parent_path = path
 				.parent()
-				.ok_or(SchemeError::URLAccessError(Cow::Borrowed(&url)))?;
+				.ok_or(SchemeError::UrlAccessError(Cow::Borrowed(&url)))?;
 			tokio::fs::create_dir_all(parent_path).await?;
 		}
 		let file = OpenOptions::from(options).open(path).await?;
