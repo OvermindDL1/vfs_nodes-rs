@@ -9,7 +9,7 @@ pub use crate::scheme::Scheme;
 pub use crate::schemes::prelude::*;
 pub use errors::*;
 
-use crate::scheme::NodeGetOptions;
+use crate::scheme::{NodeGetOptions, NodeMetadata, ReadDirStream};
 use std::borrow::Cow;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
@@ -102,6 +102,7 @@ impl Vfs {
 			})
 	}
 
+	#[allow(clippy::needless_lifetimes)] // Clippy is wrong here, it is necessary
 	pub async fn get_node<'a>(
 		&self,
 		url: &'a Url,
@@ -121,6 +122,7 @@ impl Vfs {
 			.map_err(VfsError::into_owned)
 	}
 
+	#[allow(clippy::needless_lifetimes)] // Clippy is wrong here, it is necessary
 	pub async fn remove_node<'a>(&self, url: &'a Url, force: bool) -> Result<(), VfsError<'a>> {
 		let scheme = self.get_scheme(url.scheme())?;
 		Ok(scheme.remove_node(self, url, force).await?)
@@ -128,6 +130,30 @@ impl Vfs {
 
 	pub async fn remove_node_at(&self, uri: &str, force: bool) -> Result<(), VfsError<'static>> {
 		self.remove_node(&Url::parse(uri)?, force)
+			.await
+			.map_err(VfsError::into_owned)
+	}
+
+	#[allow(clippy::needless_lifetimes)] // Clippy is wrong here, it is necessary
+	pub async fn metadata<'a>(&self, url: &'a Url) -> Result<NodeMetadata, VfsError<'a>> {
+		let scheme = self.get_scheme(url.scheme())?;
+		Ok(scheme.metadata(self, url).await?)
+	}
+
+	pub async fn metadata_at<'a>(&self, uri: &str) -> Result<NodeMetadata, VfsError<'a>> {
+		self.metadata(&Url::parse(uri)?)
+			.await
+			.map_err(VfsError::into_owned)
+	}
+
+	#[allow(clippy::needless_lifetimes)] // Clippy is wrong here, it is necessary
+	pub async fn read_dir<'a>(&self, url: &'a Url) -> Result<ReadDirStream, VfsError<'a>> {
+		let scheme = self.get_scheme(url.scheme())?;
+		Ok(scheme.read_dir(self, url).await?)
+	}
+
+	pub async fn read_dir_at<'a>(&self, uri: &str) -> Result<ReadDirStream, VfsError<'a>> {
+		self.read_dir(&Url::parse(uri)?)
 			.await
 			.map_err(VfsError::into_owned)
 	}

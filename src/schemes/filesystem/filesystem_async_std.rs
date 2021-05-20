@@ -1,7 +1,7 @@
-use crate::scheme::NodeGetOptions;
+use crate::scheme::{NodeEntry, NodeGetOptions, NodeMetadata, ReadDirStream};
 use crate::{Node, Scheme, SchemeError, Vfs};
 use async_std::fs::OpenOptions;
-use futures_lite::{AsyncRead, AsyncSeek, AsyncWrite};
+use futures_lite::{AsyncRead, AsyncSeek, AsyncWrite, StreamExt};
 use std::borrow::Cow;
 use std::path::PathBuf;
 use url::Url;
@@ -85,18 +85,64 @@ impl Scheme for AsyncStdFileSystemScheme {
 		force: bool,
 	) -> Result<(), SchemeError<'a>> {
 		let path = self.fs_path_from_url(url)?;
-		if path.exists() {
-			if path.is_file() {
-				async_std::fs::remove_file(&path).await?;
-			} else if path.is_dir() {
-				if force {
-					async_std::fs::remove_dir_all(&path).await?;
-				} else {
-					async_std::fs::remove_dir(&path).await?;
-				}
+		if path.is_file() {
+			async_std::fs::remove_file(&path).await?;
+		} else if path.is_dir() {
+			if force {
+				async_std::fs::remove_dir_all(&path).await?;
+			} else {
+				async_std::fs::remove_dir(&path).await?;
 			}
 		}
 		Ok(())
+	}
+
+	async fn metadata<'a>(
+		&self,
+		_vfs: &Vfs,
+		url: &'a Url,
+	) -> Result<NodeMetadata, SchemeError<'a>> {
+		let path = self.fs_path_from_url(url)?;
+		if let Ok(metadata) = async_std::fs::metadata(path).await {
+			let size = metadata.len() as usize;
+			Ok(NodeMetadata {
+				is_node: metadata.is_file(),
+				len: Some((size, Some(size))),
+			})
+		} else {
+			Err(SchemeError::NodeDoesNotExist(Cow::Borrowed(url.path())))
+		}
+	}
+
+	async fn read_dir<'a>(
+		&self,
+		_vfs: &Vfs,
+		url: &'a Url,
+	) -> Result<ReadDirStream, SchemeError<'a>> {
+		let path = self.fs_path_from_url(url)?;
+		if path.exists() {
+			let url = url.clone();
+			let stream = async_std::fs::read_dir(&path)
+				.await?
+				.filter_map(move |found| {
+					if let Ok(entry) = found {
+						if let Some(entry_subpath) = entry.file_name().to_str() {
+							if let Ok(entry_url) = url.join(entry_subpath) {
+								Some(NodeEntry { url: entry_url })
+							} else {
+								None
+							}
+						} else {
+							None
+						}
+					} else {
+						None
+					}
+				});
+			Ok(Box::pin(stream))
+		} else {
+			Err(SchemeError::NodeDoesNotExist(Cow::Borrowed(url.path())))
+		}
 	}
 }
 
@@ -146,7 +192,7 @@ mod tests_general {
 	use crate::scheme::NodeGetOptions;
 	use crate::Vfs;
 	use futures_lite::io::SeekFrom;
-	use futures_lite::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
+	use futures_lite::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, StreamExt};
 	use url::Url;
 
 	const FILE_TEST_CONTENT: &str = "Test content";
@@ -279,5 +325,66 @@ mod tests_general {
 			.await
 			.unwrap();
 		assert_eq!(&buffer, FILE_TEST_CONTENT);
+	}
+
+	#[async_test]
+	async fn list_nodes() {
+		let mut vfs = Vfs::default();
+		vfs.add_scheme(
+			"fs",
+			FileSystemScheme::new(std::env::current_dir().unwrap()),
+		)
+		.unwrap();
+		let metadata = vfs.metadata_at("fs:/Cargo.toml").await.unwrap();
+		assert!(metadata.is_node);
+		assert!(metadata.len.unwrap().0 > 0);
+		let metadata = vfs.metadata_at("fs:/src").await.unwrap();
+		assert!(!metadata.is_node);
+		assert!(vfs.metadata_at("fs:/blah").await.is_err());
+		assert!(vfs.metadata_at("nothing:").await.is_err());
+	}
+
+	#[async_test]
+	async fn metadata() {
+		let mut vfs = Vfs::default();
+		vfs.add_scheme(
+			"fs",
+			FileSystemScheme::new(std::env::current_dir().unwrap()),
+		)
+		.unwrap();
+		assert_eq!(
+			vfs.read_dir_at("fs:/src/schemes/filesystem/")
+				.await
+				.unwrap()
+				.filter(|u| u.url.path().ends_with("mod.rs"))
+				.count()
+				.await,
+			1
+		);
+		assert_eq!(
+			vfs.read_dir_at("fs:/src/schemes/filesystem/")
+				.await
+				.unwrap()
+				.filter(|u| u.url.path().ends_with("mod.rs"))
+				.next()
+				.await
+				.unwrap()
+				.url
+				.path(),
+			"/src/schemes/filesystem/mod.rs"
+		);
+		assert_eq!(
+			vfs.read_dir_at("fs:/src/schemes/filesystem")
+				.await
+				.unwrap()
+				.filter(|u| u.url.path().ends_with("mod.rs"))
+				.next()
+				.await
+				.unwrap()
+				.url
+				.path(),
+			"/src/schemes/mod.rs",
+			"like std::fs::read_dir trim any non-dir elements in the path"
+		);
 	}
 }

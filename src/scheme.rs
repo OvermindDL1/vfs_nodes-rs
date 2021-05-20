@@ -1,5 +1,25 @@
 use crate::{as_any_cast, Node, SchemeError, Vfs};
+use futures_lite::Stream;
+use std::pin::Pin;
 use url::Url;
+
+#[derive(Debug, Clone)]
+pub struct NodeMetadata {
+	/// If this is true then `get_node` should usually return a Node for this URL, else not, like if
+	/// it is a directory for example.
+	pub is_node: bool,
+	/// The length of the data if it is knowable, shortest possible to longest possible if knowable.
+	pub len: Option<(usize, Option<usize>)>,
+}
+
+pub struct NodeEntry {
+	pub url: Url,
+}
+
+// copied from futures-core because futures-lite doesn't re-export it and there's no point not to
+// just add it here anyway.  Plus making this one static anyway as it's just going to be used for
+// return a read_dir
+pub type ReadDirStream = Pin<Box<dyn Stream<Item = NodeEntry> + Send + 'static>>;
 
 /// This is modeled after `std::fs::OpenOptions`, same definitions for the options.
 #[derive(Clone, Debug, Default)]
@@ -132,18 +152,26 @@ impl From<&NodeGetOptions> for tokio::fs::OpenOptions {
 
 #[async_trait::async_trait]
 pub trait Scheme: as_any_cast::AsAnyCast + Sync + 'static {
+	/// Get a node with the requested permission options
 	async fn get_node<'a>(
 		&self,
 		vfs: &Vfs,
 		url: &'a Url,
 		options: &NodeGetOptions,
 	) -> Result<Box<dyn Node>, SchemeError<'a>>;
+	/// Request to remove a node, the force option is scheme dependently defined, or ignored.
 	async fn remove_node<'a>(
 		&self,
 		vfs: &Vfs,
 		url: &'a Url,
 		force: bool,
 	) -> Result<(), SchemeError<'a>>;
+	async fn metadata<'a>(&self, vfs: &Vfs, url: &'a Url) -> Result<NodeMetadata, SchemeError<'a>>;
+	/// List a set of nodes related to a given `url`.  Note, depending on the backend this can and
+	/// will include duplicates, recursive paths, directories that aren't actually nodes,, etc...
+	/// It's your job to figure out what you want.
+	async fn read_dir<'a>(&self, vfs: &Vfs, url: &'a Url)
+		-> Result<ReadDirStream, SchemeError<'a>>;
 }
 
 impl dyn Scheme {

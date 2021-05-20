@@ -1,6 +1,10 @@
-use crate::scheme::NodeGetOptions;
+use crate::scheme::{NodeEntry, NodeGetOptions, NodeMetadata, ReadDirStream};
 use crate::{Node, Scheme, SchemeError, Vfs};
+use futures_lite::Stream;
 use std::borrow::Cow;
+use std::option::Option::None;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use url::Url;
 
 #[derive(Debug)]
@@ -207,6 +211,68 @@ impl Scheme for OverlayScheme {
 		}
 		Err(SchemeError::NodeDoesNotExist(Cow::Borrowed(url.path())))
 	}
+
+	async fn metadata<'a>(&self, vfs: &Vfs, url: &'a Url) -> Result<NodeMetadata, SchemeError<'a>> {
+		for overlay in self.overlays.iter() {
+			let scheme = match overlay {
+				OverlayAccess::Read(scheme) => scheme,
+				OverlayAccess::Write(scheme) => scheme,
+				OverlayAccess::ReadWrite(scheme) => scheme,
+			};
+			match scheme.metadata(vfs, url).await {
+				Ok(metadata) => return Ok(metadata),
+				Err(_error) => continue,
+			}
+		}
+		Err(SchemeError::NodeDoesNotExist(Cow::Borrowed(url.path())))
+	}
+
+	async fn read_dir<'a>(
+		&self,
+		vfs: &Vfs,
+		url: &'a Url,
+	) -> Result<ReadDirStream, SchemeError<'a>> {
+		let mut streams = Vec::with_capacity(self.overlays.len());
+		for scheme in self.overlays.iter().rev().map(|overlay| match overlay {
+			OverlayAccess::Read(scheme) => scheme,
+			OverlayAccess::Write(scheme) => scheme,
+			OverlayAccess::ReadWrite(scheme) => scheme,
+		}) {
+			if let Ok(stream) = scheme.read_dir(vfs, url).await {
+				streams.push(stream);
+			}
+		}
+		Ok(Box::pin(OverlayReadDir(streams)))
+	}
+}
+
+struct OverlayReadDir(Vec<ReadDirStream>);
+
+impl Stream for OverlayReadDir {
+	type Item = NodeEntry;
+
+	fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+		loop {
+			if self.0.is_empty() {
+				return Poll::Ready(None);
+			}
+			match self.0.last_mut().unwrap().as_mut().poll_next(cx) {
+				Poll::Pending => return Poll::Pending,
+				Poll::Ready(None) => {
+					self.0.pop();
+				}
+				Poll::Ready(Some(entry)) => return Poll::Ready(Some(entry)),
+			}
+		}
+	}
+
+	fn size_hint(&self) -> (usize, Option<usize>) {
+		self.0
+			.iter()
+			.map(|s| s.size_hint())
+			.reduce(|(ls, le), (rs, re)| (ls + rs, le.and_then(|le| re.map(|re| re + le))))
+			.unwrap_or((0, Some(0)))
+	}
 }
 
 #[cfg(test)]
@@ -214,6 +280,7 @@ impl Scheme for OverlayScheme {
 mod async_tokio_tests {
 	use crate::scheme::NodeGetOptions;
 	use crate::{DataLoaderScheme, OverlayScheme, TokioFileSystemScheme, Vfs};
+	use futures_lite::StreamExt;
 	use url::Url;
 
 	fn u(s: &str) -> Url {
@@ -242,5 +309,33 @@ mod async_tokio_tests {
 			.get_node(&u("fs:/does/not/exist"), &NodeGetOptions::new().read(true))
 			.await
 			.is_err(),);
+	}
+
+	#[tokio::test]
+	async fn read_dir() {
+		let mut vfs = Vfs::default();
+		vfs.add_scheme(
+			"overlay",
+			OverlayScheme::builder_read(DataLoaderScheme::default())
+				.read(TokioFileSystemScheme::new(
+					std::env::current_dir().unwrap().join("src/errors"),
+				))
+				.read(TokioFileSystemScheme::new(
+					std::env::current_dir()
+						.unwrap()
+						.join("src/schemes/filesystem"),
+				))
+				.build(),
+		)
+		.unwrap();
+
+		let data = 0;
+		let errors = 3;
+		let filesystem = 3;
+
+		assert_eq!(
+			vfs.read_dir_at("overlay:/").await.unwrap().count().await,
+			data + errors + filesystem
+		);
 	}
 }

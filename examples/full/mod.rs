@@ -1,5 +1,5 @@
 use anyhow::Context;
-use futures_lite::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
+use futures_lite::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, StreamExt};
 use std::io::SeekFrom;
 use std::path::PathBuf;
 use url::Url;
@@ -248,6 +248,18 @@ a subdirectory of the read-only fs, so we can read the file from there too:\n"
 	assert_eq!(buffer, "A different file");
 	buffer.clear();
 	println!("And indeed, it is that same `different` file!\n");
+
+	println!("Let's see what entries are in the `fs` root path for this example now:");
+	let count = vfs
+		.read_dir_at("fs:/")
+		.await?
+		.inspect(|entry| println!("\t{}", entry.url))
+		.count()
+		.await;
+	println!("Ended up being {} files.\n", count);
+
+	println!("Let's see some metadata of the `test.txt` file:");
+	println!("{:?}\n", vfs.metadata_at("fs:/test.txt").await?);
 
 	Ok(())
 }

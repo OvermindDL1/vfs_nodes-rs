@@ -1,4 +1,4 @@
-use crate::scheme::NodeGetOptions;
+use crate::scheme::{NodeGetOptions, NodeMetadata, ReadDirStream};
 use crate::{Node, Scheme, SchemeError, Vfs};
 use futures_lite::{AsyncRead, AsyncSeek, AsyncWrite};
 use std::borrow::Cow;
@@ -19,16 +19,8 @@ impl DataLoaderScheme {
 	pub fn new() -> Self {
 		Self::default()
 	}
-}
 
-#[async_trait::async_trait]
-impl Scheme for DataLoaderScheme {
-	async fn get_node<'a>(
-		&self,
-		_vfs: &Vfs,
-		url: &'a Url,
-		_options: &NodeGetOptions,
-	) -> Result<Box<dyn Node>, SchemeError<'a>> {
+	pub fn parse_url_into_data(url: &Url) -> Result<(&str, Box<[u8]>), SchemeError> {
 		if url.path_segments().is_some() {
 			return Err(SchemeError::NodeDoesNotExist(Cow::Borrowed(url.path())));
 		}
@@ -36,7 +28,7 @@ impl Scheme for DataLoaderScheme {
 			.path()
 			.split_once(',')
 			.unwrap_or(("text/plain;charset=US-ASCII", url.path()));
-		let (_mimetype, data) = if data_type == "base64" || data_type.ends_with(";base64") {
+		let (mimetype, data) = if data_type == "base64" || data_type.ends_with(";base64") {
 			let mimetype = data_type.trim_end_matches("base64").trim_end_matches(';');
 			let data = base64::decode(data).map_err(|source| {
 				(
@@ -50,9 +42,21 @@ impl Scheme for DataLoaderScheme {
 			let data = percent_encoding::percent_decode_str(&data).collect();
 			(mimetype, data)
 		};
+		Ok((mimetype, data.into_boxed_slice()))
+	}
+}
 
+#[async_trait::async_trait]
+impl Scheme for DataLoaderScheme {
+	async fn get_node<'a>(
+		&self,
+		_vfs: &Vfs,
+		url: &'a Url,
+		_options: &NodeGetOptions,
+	) -> Result<Box<dyn Node>, SchemeError<'a>> {
+		let (_mimetype, data) = Self::parse_url_into_data(url)?;
 		let node = DataLoaderNode {
-			data: data.into_boxed_slice(),
+			data,
 			cursor: 0,
 			//mimetype: mimetype.to_owned(),
 		};
@@ -66,6 +70,26 @@ impl Scheme for DataLoaderScheme {
 		_force: bool,
 	) -> Result<(), SchemeError<'a>> {
 		Ok(())
+	}
+
+	async fn metadata<'a>(
+		&self,
+		_vfs: &Vfs,
+		url: &'a Url,
+	) -> Result<NodeMetadata, SchemeError<'a>> {
+		let (_mimetype, data) = Self::parse_url_into_data(url)?;
+		Ok(NodeMetadata {
+			is_node: true,
+			len: Some((data.len(), Some(data.len()))),
+		})
+	}
+
+	async fn read_dir<'a>(
+		&self,
+		_vfs: &Vfs,
+		url: &'a Url,
+	) -> Result<ReadDirStream, SchemeError<'a>> {
+		Err(SchemeError::NodeDoesNotExist(Cow::Borrowed(url.as_str())))
 	}
 }
 

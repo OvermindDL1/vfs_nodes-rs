@@ -1,9 +1,10 @@
-use crate::scheme::NodeGetOptions;
+use crate::scheme::{NodeEntry, NodeGetOptions, NodeMetadata, ReadDirStream};
 use crate::{Node, Scheme, SchemeError, Vfs};
 use dashmap::DashMap;
-use futures_lite::{AsyncRead, AsyncSeek, AsyncWrite};
+use futures_lite::{AsyncRead, AsyncSeek, AsyncWrite, Stream};
 use std::borrow::Cow;
 use std::io::SeekFrom;
+use std::option::Option::None;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
@@ -80,6 +81,80 @@ impl Scheme for MemoryScheme {
 		} else {
 			return Err(SchemeError::NodeDoesNotExist(Cow::Borrowed(url.path())));
 		}
+	}
+
+	async fn metadata<'a>(
+		&self,
+		_vfs: &Vfs,
+		url: &'a Url,
+	) -> Result<NodeMetadata, SchemeError<'a>> {
+		let path = Path::new(url.path());
+		if let Some(data) = self.storage.get(path) {
+			let size = data.read().expect("poisoned lock").len();
+			Ok(NodeMetadata {
+				is_node: true,
+				len: Some((size, Some(size))),
+			})
+		} else {
+			Err(SchemeError::NodeDoesNotExist(Cow::Borrowed(url.path())))
+		}
+	}
+
+	async fn read_dir<'a>(
+		&self,
+		_vfs: &Vfs,
+		url: &'a Url,
+	) -> Result<ReadDirStream, SchemeError<'a>> {
+		let mut path = url.path();
+		if !path.ends_with('/') {
+			if let Some(pos) = path.rfind('/') {
+				path = &path[..pos];
+			} else {
+				path = "/";
+			}
+		}
+		// Yes, a clone, maybe make this more efficient in future, but it's probably fine anyway
+		// since the data itself is stored out-of-band in an Arc anyway, although the PathBuf's are
+		// probably the more expensive clone anyway, hrmm...  This for now anyway...
+		Ok(Box::pin(MemoryReadDir(
+			self.storage.clone().into_iter(),
+			Url::parse(&format!("{}:{}", url.scheme(), path))?,
+		)))
+	}
+}
+
+struct MemoryReadDir(
+	dashmap::iter::OwningIter<PathBuf, Arc<RwLock<Vec<u8>>>>,
+	Url,
+);
+
+impl Stream for MemoryReadDir {
+	type Item = NodeEntry;
+
+	fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+		let this = self.get_mut();
+		let root_path = this.1.path();
+		loop {
+			if let Some((path, _data)) = this.0.next() {
+				let path = path
+					.to_str()
+					.expect("somehow a non-url-safe path was added to a Memory scheme");
+				// TODO:  Just return things in the current 'directory', probably want something better than a single dashmap
+				if path.starts_with(root_path) {
+					let mut url = this.1.clone();
+					url.set_path(path);
+					break Poll::Ready(Some(NodeEntry { url }));
+				} else {
+					continue;
+				}
+			} else {
+				break Poll::Ready(None);
+			}
+		}
+	}
+
+	fn size_hint(&self) -> (usize, Option<usize>) {
+		todo!()
 	}
 }
 
@@ -258,7 +333,7 @@ mod async_tokio_tests {
 	use crate::scheme::NodeGetOptions;
 	use crate::{MemoryScheme, Vfs};
 	use futures_lite::io::SeekFrom;
-	use futures_lite::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
+	use futures_lite::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, StreamExt};
 	use url::Url;
 
 	fn u(s: &str) -> Url {
@@ -422,5 +497,31 @@ mod async_tokio_tests {
 			.await
 			.unwrap();
 		assert_eq!(&buffer, "st");
+	}
+	#[tokio::test]
+	async fn node_read_dir() {
+		let mut vfs = Vfs::empty();
+		vfs.add_scheme("mem", MemoryScheme::default()).unwrap();
+
+		async fn add_empty_entry(vfs: &Vfs, name: &str) {
+			vfs.get_node_at(
+				&format!("mem:{}", name),
+				&NodeGetOptions::new().create_new(true),
+			)
+			.await
+			.unwrap();
+		}
+		add_empty_entry(&vfs, "/test0").await;
+		add_empty_entry(&vfs, "/test1").await;
+		add_empty_entry(&vfs, "/test2").await;
+		add_empty_entry(&vfs, "/test/blah0").await;
+		add_empty_entry(&vfs, "/test/blah1").await;
+
+		assert_eq!(vfs.read_dir_at("mem:/").await.unwrap().count().await, 5);
+		assert_eq!(vfs.read_dir_at("mem:/test").await.unwrap().count().await, 5);
+		assert_eq!(
+			vfs.read_dir_at("mem:/test/").await.unwrap().count().await,
+			2
+		);
 	}
 }

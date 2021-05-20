@@ -1,6 +1,6 @@
 #![allow(clippy::try_err)]
 
-use crate::scheme::NodeGetOptions;
+use crate::scheme::{NodeGetOptions, NodeMetadata, ReadDirStream};
 use crate::{Node, Scheme, SchemeError, Vfs};
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -227,6 +227,24 @@ impl Scheme for SymLinkScheme {
 	) -> Result<(), SchemeError<'a>> {
 		let url = self.get_symlink_dest(url)?;
 		let fut = vfs.remove_node(&url, force);
+		// Split the `await` from the `fut` so `url` can drop or else lifetime annoyance
+		Ok(fut.await?)
+	}
+
+	async fn metadata<'a>(&self, vfs: &Vfs, url: &'a Url) -> Result<NodeMetadata, SchemeError<'a>> {
+		let url = self.get_symlink_dest(url)?;
+		let fut = vfs.metadata(&url);
+		// Split the `await` from the `fut` so `url` can drop or else lifetime annoyance
+		Ok(fut.await?)
+	}
+
+	async fn read_dir<'a>(
+		&self,
+		vfs: &Vfs,
+		url: &'a Url,
+	) -> Result<ReadDirStream, SchemeError<'a>> {
+		let url = self.get_symlink_dest(url)?;
+		let fut = vfs.read_dir(&url);
 		// Split the `await` from the `fut` so `url` can drop or else lifetime annoyance
 		Ok(fut.await?)
 	}

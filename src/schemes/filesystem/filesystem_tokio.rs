@@ -1,6 +1,6 @@
-use crate::scheme::NodeGetOptions;
+use crate::scheme::{NodeEntry, NodeGetOptions, NodeMetadata, ReadDirStream};
 use crate::{Node, Scheme, SchemeError, Vfs};
-use futures_lite::{ready, AsyncRead, AsyncSeek, AsyncWrite};
+use futures_lite::{ready, AsyncRead, AsyncSeek, AsyncWrite, Stream};
 use std::borrow::Cow;
 use std::io::{IoSlice, SeekFrom};
 use std::path::PathBuf;
@@ -100,6 +100,66 @@ impl Scheme for TokioFileSystemScheme {
 			}
 		}
 		Ok(())
+	}
+
+	async fn metadata<'a>(
+		&self,
+		_vfs: &Vfs,
+		url: &'a Url,
+	) -> Result<NodeMetadata, SchemeError<'a>> {
+		let path = self.fs_path_from_url(url)?;
+		if let Ok(metadata) = tokio::fs::metadata(path).await {
+			let size = metadata.len() as usize;
+			Ok(NodeMetadata {
+				is_node: metadata.is_file(),
+				len: Some((size, Some(size))),
+			})
+		} else {
+			Err(SchemeError::NodeDoesNotExist(Cow::Borrowed(url.path())))
+		}
+	}
+
+	async fn read_dir<'a>(
+		&self,
+		_vfs: &Vfs,
+		url: &'a Url,
+	) -> Result<ReadDirStream, SchemeError<'a>> {
+		let path = self.fs_path_from_url(url)?;
+		if path.exists() {
+			Ok(Box::pin(TokioReadDirWrapper(
+				tokio::fs::read_dir(&path).await?,
+				url.clone(),
+			)))
+		} else {
+			Err(SchemeError::NodeDoesNotExist(Cow::Borrowed(url.path())))
+		}
+	}
+}
+
+// Yeah, tokio's ReadDir really doesn't implement `Stream`, instead you have to call it manually...
+struct TokioReadDirWrapper(tokio::fs::ReadDir, Url);
+
+impl Stream for TokioReadDirWrapper {
+	type Item = NodeEntry;
+
+	fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+		loop {
+			match ready!(self.0.poll_next_entry(cx)) {
+				Err(_io_error) => continue,          // skip nodes with IO errors
+				Ok(None) => break Poll::Ready(None), // done
+				Ok(Some(entry)) => {
+					if let Some(entry_sub_path) = entry.file_name().to_str() {
+						if let Ok(entry_url) = self.1.join(&entry_sub_path) {
+							break Poll::Ready(Some(NodeEntry { url: entry_url }));
+						} else {
+							continue; // failed parsing new URL entry, invalid name format
+						}
+					} else {
+						continue; // failed to convert the OsStr to a normal string, so it will be an invalid URL as well
+					}
+				}
+			}
+		}
 	}
 }
 
@@ -233,7 +293,7 @@ mod tests_general {
 	use crate::scheme::NodeGetOptions;
 	use crate::Vfs;
 	use futures_lite::io::SeekFrom;
-	use futures_lite::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
+	use futures_lite::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, StreamExt};
 	use url::Url;
 
 	const FILE_TEST_CONTENT: &str = "Test content";
@@ -366,5 +426,66 @@ mod tests_general {
 			.await
 			.unwrap();
 		assert_eq!(&buffer, FILE_TEST_CONTENT);
+	}
+
+	#[async_test]
+	async fn metadata() {
+		let mut vfs = Vfs::default();
+		vfs.add_scheme(
+			"fs",
+			FileSystemScheme::new(std::env::current_dir().unwrap()),
+		)
+		.unwrap();
+		let metadata = vfs.metadata_at("fs:/Cargo.toml").await.unwrap();
+		assert!(metadata.is_node);
+		assert!(metadata.len.unwrap().0 > 0);
+		let metadata = vfs.metadata_at("fs:/src").await.unwrap();
+		assert!(!metadata.is_node);
+		assert!(vfs.metadata_at("fs:/blah").await.is_err());
+		assert!(vfs.metadata_at("nothing:").await.is_err());
+	}
+
+	#[async_test]
+	async fn list_nodes() {
+		let mut vfs = Vfs::default();
+		vfs.add_scheme(
+			"fs",
+			FileSystemScheme::new(std::env::current_dir().unwrap()),
+		)
+		.unwrap();
+		assert_eq!(
+			vfs.read_dir_at("fs:/src/schemes/filesystem/")
+				.await
+				.unwrap()
+				.filter(|u| u.url.path().ends_with("mod.rs"))
+				.count()
+				.await,
+			1
+		);
+		assert_eq!(
+			vfs.read_dir_at("fs:/src/schemes/filesystem/")
+				.await
+				.unwrap()
+				.filter(|u| u.url.path().ends_with("mod.rs"))
+				.next()
+				.await
+				.unwrap()
+				.url
+				.path(),
+			"/src/schemes/filesystem/mod.rs"
+		);
+		assert_eq!(
+			vfs.read_dir_at("fs:/src/schemes/filesystem")
+				.await
+				.unwrap()
+				.filter(|u| u.url.path().ends_with("mod.rs"))
+				.next()
+				.await
+				.unwrap()
+				.url
+				.path(),
+			"/src/schemes/mod.rs",
+			"like std::fs::read_dir trim any non-dir elements in the path"
+		);
 	}
 }
