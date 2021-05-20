@@ -1,6 +1,6 @@
 <component name="ProjectRunConfigurationManager">
-  <configuration default="false" name="Build - Dynamic" type="CargoCommandRunConfiguration" factoryName="Cargo Command">
-    <option name="command" value="build --features bevy/dynamic" />
+  <configuration default="false" name="Example Full - async_std" type="CargoCommandRunConfiguration" factoryName="Cargo Command">
+    <option name="command" value="run --example full_async_std --features=&quot;backend_async_std in_memory anyhow&quot;" />
     <option name="workingDirectory" value="file://$PROJECT_DIR$" />
     <option name="channel" value="DEFAULT" />
     <option name="requiredFeatures" value="true" />

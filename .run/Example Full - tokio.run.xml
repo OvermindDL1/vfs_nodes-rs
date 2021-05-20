@@ -1,6 +1,6 @@
 <component name="ProjectRunConfigurationManager">
-  <configuration default="false" name="Example Full - Dynamic" type="CargoCommandRunConfiguration" factoryName="Cargo Command">
-    <option name="command" value="run --example full --features bevy/dynamic" />
+  <configuration default="false" name="Example Full - tokio" type="CargoCommandRunConfiguration" factoryName="Cargo Command">
+    <option name="command" value="run --example full_tokio --features=&quot;backend_tokio in_memory tokio/rt-multi-thread anyhow&quot;" />
     <option name="workingDirectory" value="file://$PROJECT_DIR$" />
     <option name="channel" value="DEFAULT" />
     <option name="requiredFeatures" value="true" />

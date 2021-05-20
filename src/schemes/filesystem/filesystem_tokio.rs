@@ -72,7 +72,12 @@ impl Scheme for TokioFileSystemScheme {
 			tokio::fs::create_dir_all(parent_path).await?;
 		}
 		let file = OpenOptions::from(options).open(path).await?;
-		let node = TokioFileSystemNode { file, seek: None };
+		let node = TokioFileSystemNode {
+			file,
+			seek: None,
+			read: options.get_read(),
+			write: options.get_write(),
+		};
 		Ok(Box::new(node))
 	}
 
@@ -101,29 +106,34 @@ impl Scheme for TokioFileSystemScheme {
 pub struct TokioFileSystemNode {
 	file: tokio::fs::File,
 	seek: Option<std::io::SeekFrom>,
+	read: bool,
+	write: bool,
 }
 
 #[async_trait::async_trait]
 impl Node for TokioFileSystemNode {
 	async fn read<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncRead + Unpin)> {
-		Some(self)
+		if self.read {
+			Some(self)
+		} else {
+			None
+		}
 	}
 
 	async fn write<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncWrite + Unpin)> {
-		Some(self)
+		if self.write {
+			Some(self)
+		} else {
+			None
+		}
 	}
 
-	// async fn read_write<'s>(
-	// 	&'s mut self,
-	// ) -> Option<(
-	// 	ReadHalf<&'s mut dyn AsyncReadWriteUnpin>,
-	// 	WriteHalf<&'s mut dyn AsyncReadWriteUnpin>,
-	// )> {
-	// 	Some(tokio::io::split(&mut self.file))
-	// }
-
 	async fn seek<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncSeek + Unpin)> {
-		Some(self)
+		if self.read || self.write {
+			Some(self)
+		} else {
+			None
+		}
 	}
 }
 

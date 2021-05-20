@@ -6,7 +6,7 @@ pub mod schemes;
 
 pub use crate::node::Node;
 pub use crate::scheme::Scheme;
-pub use crate::schemes::*;
+pub use crate::schemes::prelude::*;
 pub use errors::*;
 
 use crate::scheme::NodeGetOptions;
@@ -50,11 +50,19 @@ impl Vfs {
 		scheme_name: impl Into<String>,
 		scheme: impl Scheme,
 	) -> Result<&mut Self, VfsError<'static>> {
+		self.add_boxed_scheme(scheme_name, Box::new(scheme))
+	}
+
+	pub fn add_boxed_scheme(
+		&mut self,
+		scheme_name: impl Into<String>,
+		scheme: Box<dyn Scheme>,
+	) -> Result<&mut Self, VfsError<'static>> {
 		let scheme_name = scheme_name.into();
 		match self.schemes.entry(scheme_name.clone()) {
 			Entry::Occupied(_entry) => Err(VfsError::SchemeAlreadyExists(scheme_name)),
 			Entry::Vacant(entry) => {
-				entry.insert(Box::new(scheme));
+				entry.insert(scheme.into());
 				Ok(self)
 			}
 		}

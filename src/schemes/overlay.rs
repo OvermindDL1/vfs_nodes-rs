@@ -33,56 +33,88 @@ pub struct OverlaySchemeBuilder {
 }
 
 impl OverlayScheme {
-	pub fn builder_read(first_overlay: impl Scheme) -> OverlaySchemeBuilder {
+	pub fn builder_boxed_read(first_overlay: Box<dyn Scheme>) -> OverlaySchemeBuilder {
 		OverlaySchemeBuilder {
-			overlays: vec![OverlayAccess::Read(Box::new(first_overlay))],
+			overlays: vec![OverlayAccess::Read(first_overlay)],
 		}
+	}
+
+	pub fn builder_boxed_write(first_overlay: Box<dyn Scheme>) -> OverlaySchemeBuilder {
+		OverlaySchemeBuilder {
+			overlays: vec![OverlayAccess::Write(first_overlay)],
+		}
+	}
+
+	pub fn builder_boxed_read_write(first_overlay: Box<dyn Scheme>) -> OverlaySchemeBuilder {
+		OverlaySchemeBuilder {
+			overlays: vec![OverlayAccess::ReadWrite(first_overlay)],
+		}
+	}
+
+	pub fn builder_read(first_overlay: impl Scheme) -> OverlaySchemeBuilder {
+		Self::builder_boxed_read(Box::new(first_overlay))
 	}
 
 	pub fn builder_write(first_overlay: impl Scheme) -> OverlaySchemeBuilder {
-		OverlaySchemeBuilder {
-			overlays: vec![OverlayAccess::Write(Box::new(first_overlay))],
-		}
+		Self::builder_boxed_write(Box::new(first_overlay))
 	}
 
 	pub fn builder_read_write(first_overlay: impl Scheme) -> OverlaySchemeBuilder {
-		OverlaySchemeBuilder {
-			overlays: vec![OverlayAccess::ReadWrite(Box::new(first_overlay))],
-		}
+		Self::builder_boxed_read_write(Box::new(first_overlay))
+	}
+
+	pub fn append_boxed_read(&mut self, overlay: Box<dyn Scheme>) -> &mut Self {
+		self.overlays.push(OverlayAccess::Read(overlay));
+		self
+	}
+
+	pub fn append_boxed_write(&mut self, overlay: Box<dyn Scheme>) -> &mut Self {
+		self.overlays.push(OverlayAccess::Write(overlay));
+		self
+	}
+
+	pub fn append_boxed_read_write(&mut self, overlay: Box<dyn Scheme>) -> &mut Self {
+		self.overlays.push(OverlayAccess::ReadWrite(overlay));
+		self
+	}
+
+	pub fn prepend_boxed_read(&mut self, overlay: Box<dyn Scheme>) -> &mut Self {
+		self.overlays.insert(0, OverlayAccess::Read(overlay));
+		self
+	}
+
+	pub fn prepend_boxed_write(&mut self, overlay: Box<dyn Scheme>) -> &mut Self {
+		self.overlays.insert(0, OverlayAccess::Write(overlay));
+		self
+	}
+
+	pub fn prepend_boxed_read_write(&mut self, overlay: Box<dyn Scheme>) -> &mut Self {
+		self.overlays.insert(0, OverlayAccess::ReadWrite(overlay));
+		self
 	}
 
 	pub fn append_read(&mut self, overlay: impl Scheme) -> &mut Self {
-		self.overlays.push(OverlayAccess::Read(Box::new(overlay)));
-		self
+		self.append_boxed_read(Box::new(overlay))
 	}
 
 	pub fn append_write(&mut self, overlay: impl Scheme) -> &mut Self {
-		self.overlays.push(OverlayAccess::Write(Box::new(overlay)));
-		self
+		self.append_boxed_write(Box::new(overlay))
 	}
 
 	pub fn append_read_write(&mut self, overlay: impl Scheme) -> &mut Self {
-		self.overlays
-			.push(OverlayAccess::ReadWrite(Box::new(overlay)));
-		self
+		self.append_boxed_read_write(Box::new(overlay))
 	}
 
 	pub fn prepend_read(&mut self, overlay: impl Scheme) -> &mut Self {
-		self.overlays
-			.insert(0, OverlayAccess::Read(Box::new(overlay)));
-		self
+		self.prepend_boxed_read(Box::new(overlay))
 	}
 
 	pub fn prepend_write(&mut self, overlay: impl Scheme) -> &mut Self {
-		self.overlays
-			.insert(0, OverlayAccess::Write(Box::new(overlay)));
-		self
+		self.prepend_boxed_write(Box::new(overlay))
 	}
 
 	pub fn prepend_read_write(&mut self, overlay: impl Scheme) -> &mut Self {
-		self.overlays
-			.insert(0, OverlayAccess::ReadWrite(Box::new(overlay)));
-		self
+		self.prepend_boxed_read_write(Box::new(overlay))
 	}
 }
 
@@ -91,6 +123,21 @@ impl OverlaySchemeBuilder {
 		OverlayScheme {
 			overlays: self.overlays,
 		}
+	}
+
+	pub fn boxed_read(mut self, overlay: Box<dyn Scheme>) -> Self {
+		self.overlays.push(OverlayAccess::Read(overlay));
+		self
+	}
+
+	pub fn boxed_write(mut self, overlay: Box<dyn Scheme>) -> Self {
+		self.overlays.push(OverlayAccess::Write(overlay));
+		self
+	}
+
+	pub fn boxed_read_write(mut self, overlay: Box<dyn Scheme>) -> Self {
+		self.overlays.push(OverlayAccess::ReadWrite(overlay));
+		self
 	}
 
 	pub fn read(mut self, overlay: impl Scheme) -> Self {

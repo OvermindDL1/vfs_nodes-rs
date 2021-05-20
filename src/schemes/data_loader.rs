@@ -15,6 +15,12 @@ impl Default for DataLoaderScheme {
 	}
 }
 
+impl DataLoaderScheme {
+	pub fn new() -> Self {
+		Self::default()
+	}
+}
+
 #[async_trait::async_trait]
 impl Scheme for DataLoaderScheme {
 	async fn get_node<'a>(
@@ -35,7 +41,7 @@ impl Scheme for DataLoaderScheme {
 			let data = base64::decode(data).map_err(|source| {
 				(
 					"data_loader error",
-					Box::new(source) as Box<dyn std::error::Error>,
+					Box::new(source) as Box<dyn std::error::Error + Send + Sync>,
 				)
 			})?;
 			(mimetype, data)

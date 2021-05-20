@@ -3,31 +3,22 @@ use crate::{Node, Scheme, SchemeError, Vfs};
 use dashmap::DashMap;
 use futures_lite::{AsyncRead, AsyncSeek, AsyncWrite};
 use std::borrow::Cow;
-use std::io::{IoSlice, SeekFrom};
+use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 use std::task::{Context, Poll};
 use url::Url;
 
-#[derive(Debug)]
-pub enum MemoryError {}
-
-impl std::fmt::Display for MemoryError {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		f.write_str("IMPOSSIBLE-ERROR")
-	}
-}
-
-impl std::error::Error for MemoryError {
-	fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-		None
-	}
-}
-
 #[derive(Default)]
 pub struct MemoryScheme {
 	storage: DashMap<PathBuf, Arc<RwLock<Vec<u8>>>>,
+}
+
+impl MemoryScheme {
+	pub fn new() -> Self {
+		Self::default()
+	}
 }
 
 #[async_trait::async_trait]
@@ -63,7 +54,12 @@ impl Scheme for MemoryScheme {
 		} else {
 			0
 		};
-		let node = MemoryNode { data, cursor };
+		let node = MemoryNode {
+			data,
+			cursor,
+			read: options.get_read(),
+			write: options.get_write(),
+		};
 		Ok(Box::new(node))
 	}
 
@@ -90,20 +86,34 @@ impl Scheme for MemoryScheme {
 pub struct MemoryNode {
 	data: Arc<RwLock<Vec<u8>>>,
 	cursor: usize,
+	read: bool,
+	write: bool,
 }
 
 #[async_trait::async_trait]
 impl Node for MemoryNode {
 	async fn read<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncRead + Unpin)> {
-		Some(self)
+		if self.read {
+			Some(self)
+		} else {
+			None
+		}
 	}
 
 	async fn write<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncWrite + Unpin)> {
-		Some(self)
+		if self.write {
+			Some(self)
+		} else {
+			None
+		}
 	}
 
 	async fn seek<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncSeek + Unpin)> {
-		Some(self)
+		if self.read || self.write {
+			Some(self)
+		} else {
+			None
+		}
 	}
 }
 
@@ -113,6 +123,9 @@ impl AsyncRead for MemoryNode {
 		_cx: &mut Context<'_>,
 		buf: &mut [u8],
 	) -> Poll<std::io::Result<usize>> {
+		if !self.read {
+			return Poll::Ready(Err(std::io::Error::from_raw_os_error(13)));
+		}
 		let data = self.data.read().expect("poisoned lock");
 		if self.cursor >= data.len() {
 			return Poll::Ready(Ok(0));
@@ -129,34 +142,60 @@ impl AsyncRead for MemoryNode {
 
 impl AsyncWrite for MemoryNode {
 	fn poll_write(
-		self: Pin<&mut Self>,
+		mut self: Pin<&mut Self>,
 		_cx: &mut Context<'_>,
 		buf: &[u8],
 	) -> Poll<std::io::Result<usize>> {
+		if !self.write {
+			return Poll::Ready(Err(std::io::Error::from_raw_os_error(13)));
+		}
 		let mut data = self.data.write().expect("poisoned lock");
-		data.extend_from_slice(buf);
+		if self.cursor >= data.len() {
+			data.extend_from_slice(buf);
+			let len = data.len();
+			drop(data);
+			self.cursor = len;
+		} else if self.cursor + buf.len() < data.len() {
+			data.as_mut_slice()[self.cursor..self.cursor + buf.len()].copy_from_slice(buf);
+			drop(data);
+			self.cursor += buf.len()
+		} else {
+			let at = buf.len() - ((self.cursor + buf.len()) - data.len());
+			let (inside, outside) = buf.split_at(at);
+			data.as_mut_slice()[self.cursor..].copy_from_slice(inside);
+			data.extend_from_slice(outside);
+			let len = data.len();
+			drop(data);
+			self.cursor = len;
+		}
 		Poll::Ready(Ok(buf.len()))
 	}
 
-	fn poll_write_vectored(
-		self: Pin<&mut Self>,
-		_cx: &mut Context<'_>,
-		bufs: &[IoSlice<'_>],
-	) -> Poll<std::io::Result<usize>> {
-		let mut amt = 0;
-		let mut data = self.data.write().expect("poisoned lock");
-		for buf in bufs {
-			amt += buf.len();
-			data.extend_from_slice(&*buf);
-		}
-		Poll::Ready(Ok(amt))
-	}
+	// fn poll_write_vectored(
+	// 	self: Pin<&mut Self>,
+	// 	_cx: &mut Context<'_>,
+	// 	bufs: &[IoSlice<'_>],
+	// ) -> Poll<std::io::Result<usize>> {
+	// 	let mut amt = 0;
+	// 	let mut data = self.data.write().expect("poisoned lock");
+	// 	for buf in bufs {
+	// 		amt += buf.len();
+	// 		data.extend_from_slice(&*buf);
+	// 	}
+	// 	Poll::Ready(Ok(amt))
+	// }
 
 	fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+		if !self.write {
+			return Poll::Ready(Err(std::io::Error::from_raw_os_error(13)));
+		}
 		Poll::Ready(Ok(()))
 	}
 
 	fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+		if !self.write {
+			return Poll::Ready(Err(std::io::Error::from_raw_os_error(13)));
+		}
 		Poll::Ready(Ok(()))
 	}
 }
@@ -167,6 +206,9 @@ impl AsyncSeek for MemoryNode {
 		_cx: &mut Context<'_>,
 		pos: SeekFrom,
 	) -> Poll<std::io::Result<u64>> {
+		if !self.read && !self.write {
+			return Poll::Ready(Err(std::io::Error::from_raw_os_error(13)));
+		}
 		let this = self.get_mut();
 		match pos {
 			SeekFrom::Start(pos) => {
@@ -264,6 +306,12 @@ mod async_tokio_tests {
 			.write_all("test string".as_bytes())
 			.await
 			.unwrap();
+		node.seek()
+			.await
+			.unwrap()
+			.seek(SeekFrom::Start(0))
+			.await
+			.unwrap();
 		let mut buffer = String::new();
 		node.read()
 			.await
@@ -293,6 +341,12 @@ mod async_tokio_tests {
 				.await
 				.unwrap()
 				.write_all("test string".as_bytes())
+				.await
+				.unwrap();
+			node.seek()
+				.await
+				.unwrap()
+				.seek(SeekFrom::Start(0))
 				.await
 				.unwrap();
 			let mut buffer = String::new();
@@ -340,6 +394,12 @@ mod async_tokio_tests {
 			.write_all("test".as_bytes())
 			.await
 			.unwrap();
+		node.seek()
+			.await
+			.unwrap()
+			.seek(SeekFrom::Start(0))
+			.await
+			.unwrap();
 		let mut buffer = String::new();
 		node.read()
 			.await
@@ -348,13 +408,13 @@ mod async_tokio_tests {
 			.await
 			.unwrap();
 		assert_eq!(&buffer, "test");
+		buffer.clear();
 		node.seek()
 			.await
 			.unwrap()
 			.seek(SeekFrom::Start(2))
 			.await
 			.unwrap();
-		buffer.clear();
 		node.read()
 			.await
 			.unwrap()

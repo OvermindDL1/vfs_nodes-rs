@@ -70,7 +70,11 @@ impl Scheme for AsyncStdFileSystemScheme {
 		// let node = AsyncStdFileSystemNode {
 		// 	file,
 		// };
-		let node = file;
+		let node = AsyncStdFileSystemNode {
+			file,
+			read: options.get_read(),
+			write: options.get_write(),
+		};
 		Ok(Box::new(node))
 	}
 
@@ -96,39 +100,38 @@ impl Scheme for AsyncStdFileSystemScheme {
 	}
 }
 
+pub struct AsyncStdFileSystemNode {
+	file: async_std::fs::File,
+	read: bool,
+	write: bool,
+}
+
 #[async_trait::async_trait]
-impl Node for async_std::fs::File {
+impl Node for AsyncStdFileSystemNode {
 	async fn read<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncRead + Unpin)> {
-		Some(self)
+		if self.read {
+			Some(&mut self.file)
+		} else {
+			None
+		}
 	}
 
 	async fn write<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncWrite + Unpin)> {
-		Some(self)
+		if self.write {
+			Some(&mut self.file)
+		} else {
+			None
+		}
 	}
 
 	async fn seek<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncSeek + Unpin)> {
-		Some(self)
+		if self.read || self.write {
+			Some(&mut self.file)
+		} else {
+			None
+		}
 	}
 }
-
-// pub struct AsyncStdFileSystemNode {
-// 	file: async_std::fs::File,
-// }
-//
-// #[async_trait::async_trait]
-// impl Node for AsyncStdFileSystemNode {
-// 	async fn read<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncRead + Unpin)> {
-// 		Some(&mut self.file)
-// 	}
-//
-// 	async fn write<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncWrite + Unpin)> {
-// 		Some(&mut self.file)
-// 	}
-//
-// 	async fn seek<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncSeek + Unpin)> {
-// 		Some(&mut self.file)
-// 	}
-// }
 
 #[cfg(test)]
 mod tests_general {

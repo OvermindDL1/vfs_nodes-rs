@@ -6,7 +6,7 @@ use url::Url;
 pub enum SchemeError<'name> {
 	GenericError(
 		Option<&'static str>,
-		Option<Box<dyn std::error::Error + 'static>>,
+		Option<Box<dyn std::error::Error + 'static + Send + Sync>>,
 	),
 	UrlParseError(url::ParseError),
 	UrlAccessError(Cow<'name, Url>),
@@ -56,7 +56,10 @@ impl<'name> std::fmt::Display for SchemeError<'name> {
 impl<'name> std::error::Error for SchemeError<'name> {
 	fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
 		match self {
-			SchemeError::GenericError(_msg, source) => source.as_ref().map(AsRef::as_ref),
+			SchemeError::GenericError(_msg, source) => source.as_ref().map(|source| {
+				let source: &dyn std::error::Error = &**source;
+				source
+			}),
 			SchemeError::NodeDoesNotExist(_name) => None,
 			SchemeError::IOError(source) => Some(source),
 			SchemeError::NodeAlreadyExists(_name) => None,
@@ -78,38 +81,68 @@ impl From<Option<&'static str>> for SchemeError<'static> {
 	}
 }
 
-impl From<(&'static str, Option<Box<dyn std::error::Error>>)> for SchemeError<'static> {
-	fn from((msg, source): (&'static str, Option<Box<dyn std::error::Error>>)) -> Self {
+impl
+	From<(
+		&'static str,
+		Option<Box<dyn std::error::Error + Send + Sync>>,
+	)> for SchemeError<'static>
+{
+	fn from(
+		(msg, source): (
+			&'static str,
+			Option<Box<dyn std::error::Error + Send + Sync>>,
+		),
+	) -> Self {
 		SchemeError::GenericError(Some(msg), source)
 	}
 }
 
-impl From<(Option<&'static str>, Option<Box<dyn std::error::Error>>)> for SchemeError<'static> {
-	fn from((msg, source): (Option<&'static str>, Option<Box<dyn std::error::Error>>)) -> Self {
+impl
+	From<(
+		Option<&'static str>,
+		Option<Box<dyn std::error::Error + Send + Sync>>,
+	)> for SchemeError<'static>
+{
+	fn from(
+		(msg, source): (
+			Option<&'static str>,
+			Option<Box<dyn std::error::Error + Send + Sync>>,
+		),
+	) -> Self {
 		SchemeError::GenericError(msg, source)
 	}
 }
 
-impl From<(&'static str, Box<dyn std::error::Error>)> for SchemeError<'static> {
-	fn from((msg, source): (&'static str, Box<dyn std::error::Error>)) -> Self {
+impl From<(&'static str, Box<dyn std::error::Error + Send + Sync>)> for SchemeError<'static> {
+	fn from((msg, source): (&'static str, Box<dyn std::error::Error + Send + Sync>)) -> Self {
 		SchemeError::GenericError(Some(msg), Some(source))
 	}
 }
 
-impl From<(Option<&'static str>, Box<dyn std::error::Error>)> for SchemeError<'static> {
-	fn from((msg, source): (Option<&'static str>, Box<dyn std::error::Error>)) -> Self {
+impl
+	From<(
+		Option<&'static str>,
+		Box<dyn std::error::Error + Send + Sync>,
+	)> for SchemeError<'static>
+{
+	fn from(
+		(msg, source): (
+			Option<&'static str>,
+			Box<dyn std::error::Error + Send + Sync>,
+		),
+	) -> Self {
 		SchemeError::GenericError(msg, Some(source))
 	}
 }
 
-impl From<Option<Box<dyn std::error::Error>>> for SchemeError<'static> {
-	fn from(source: Option<Box<dyn std::error::Error>>) -> Self {
+impl From<Option<Box<dyn std::error::Error + Send + Sync>>> for SchemeError<'static> {
+	fn from(source: Option<Box<dyn std::error::Error + Send + Sync>>) -> Self {
 		SchemeError::GenericError(None, source)
 	}
 }
 
-impl From<Box<dyn std::error::Error>> for SchemeError<'static> {
-	fn from(source: Box<dyn std::error::Error>) -> Self {
+impl From<Box<dyn std::error::Error + Send + Sync>> for SchemeError<'static> {
+	fn from(source: Box<dyn std::error::Error + Send + Sync>) -> Self {
 		SchemeError::GenericError(None, Some(source))
 	}
 }
