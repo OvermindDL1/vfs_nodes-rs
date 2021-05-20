@@ -12,6 +12,7 @@ pub struct NodeMetadata {
 	pub len: Option<(usize, Option<usize>)>,
 }
 
+#[derive(Debug, Clone)]
 pub struct NodeEntry {
 	pub url: Url,
 }

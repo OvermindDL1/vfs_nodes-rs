@@ -68,6 +68,13 @@ it to fall back to, but you can add more with a variety of read/write access.\n"
 			.build(),
 	)?;
 
+	println!("Let's add an embedded filesystem as well.\n");
+	#[derive(rust_embed::RustEmbed)]
+	#[folder = "examples"]
+	struct MyEmbed;
+	vfs.add_scheme("embed", EmbeddedScheme::<MyEmbed>::new())
+		.unwrap();
+
 	println!(
 		"Just going to define some quick helpers here for the open options.  These are the same as
 in `std::fs::OpenOptions` with the same meanings, although internally a scheme can do as it
@@ -260,6 +267,27 @@ a subdirectory of the read-only fs, so we can read the file from there too:\n"
 
 	println!("Let's see some metadata of the `test.txt` file:");
 	println!("{:?}\n", vfs.metadata_at("fs:/test.txt").await?);
+
+	println!("Let's also access the embedded filesystem.\n");
+	assert!(vfs.get_node_at("embed:/nothing/here", read).await.is_err());
+	vfs.get_node_at("embed:/full_tokio.rs", read)
+		.await?
+		.read()
+		.await
+		.context("unsupported")?
+		.read_to_string(buffer)
+		.await?;
+	assert!(buffer.contains("main"));
+	buffer.clear();
+
+	println!("Let's see what entries are in the `embed` root path for this example as well:");
+	let count = vfs
+		.read_dir_at("embed:/")
+		.await?
+		.inspect(|entry| println!("\t{}", entry.url))
+		.count()
+		.await;
+	println!("Ended up being {} files.\n", count);
 
 	Ok(())
 }

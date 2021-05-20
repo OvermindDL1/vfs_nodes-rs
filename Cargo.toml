@@ -13,6 +13,7 @@ futures-lite = "1.11"
 async-std = { version = "1", features = ["attributes"], optional = true }
 tokio = { version = "1.5", features = ["rt", "fs", "net", "io-util", "process", "macros"], optional = true }
 dashmap = { version = "4.0", optional = true }
+rust-embed = { version = "5.9", optional = true }
 #async-compression = { version = "0.3.8", features = ["tokio", "gzip", "deflate"] }
 # Used only for examples:
 anyhow = { version = "1", optional = true}
@@ -21,11 +22,12 @@ anyhow = { version = "1", optional = true}
 backend_tokio = ["tokio"]
 backend_async_std = ["async-std"]
 in_memory = ["dashmap"]
+embedded = ["rust-embed"]
 
 [[example]]
 name = "full_tokio"
-required-features = ["backend_tokio", "in_memory", "tokio/rt-multi-thread", "anyhow"]
+required-features = ["backend_tokio", "in_memory", "embedded", "tokio/rt-multi-thread", "anyhow"]
 
 [[example]]
 name = "full_async_std"
-required-features = ["backend_async_std", "in_memory", "anyhow"]
+required-features = ["backend_async_std", "in_memory", "embedded", "anyhow"]
