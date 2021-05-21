@@ -1,5 +1,5 @@
 use crate::scheme::{NodeEntry, NodeGetOptions, NodeMetadata, ReadDirStream};
-use crate::{Node, Scheme, SchemeError, Vfs};
+use crate::{PinnedNode, Scheme, SchemeError, Vfs};
 use futures_lite::Stream;
 use std::borrow::Cow;
 use std::option::Option::None;
@@ -168,7 +168,7 @@ impl Scheme for OverlayScheme {
 		vfs: &Vfs,
 		url: &'a Url,
 		options: &NodeGetOptions,
-	) -> Result<Box<dyn Node>, SchemeError<'a>> {
+	) -> Result<PinnedNode, SchemeError<'a>> {
 		for overlay in self.overlays.iter() {
 			let node = match overlay {
 				OverlayAccess::Read(scheme) if options.get_read() => {

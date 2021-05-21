@@ -5,7 +5,7 @@ pub mod scheme;
 pub mod schemes;
 
 pub use crate::node::Node;
-pub use crate::scheme::Scheme;
+pub use crate::scheme::{PinnedNode, Scheme};
 pub use crate::schemes::prelude::*;
 pub use errors::*;
 
@@ -107,7 +107,7 @@ impl Vfs {
 		&self,
 		url: &'a Url,
 		options: &NodeGetOptions,
-	) -> Result<Box<dyn Node>, VfsError<'a>> {
+	) -> Result<PinnedNode, VfsError<'a>> {
 		let scheme = self.get_scheme(url.scheme())?;
 		Ok(scheme.get_node(self, url, options).await?)
 	}
@@ -116,7 +116,7 @@ impl Vfs {
 		&self,
 		uri: &str,
 		options: &NodeGetOptions,
-	) -> Result<Box<dyn Node>, VfsError<'static>> {
+	) -> Result<PinnedNode, VfsError<'static>> {
 		self.get_node(&Url::parse(uri)?, options)
 			.await
 			.map_err(VfsError::into_owned)

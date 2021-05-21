@@ -1,7 +1,7 @@
 #![allow(clippy::try_err)]
 
 use crate::scheme::{NodeGetOptions, NodeMetadata, ReadDirStream};
-use crate::{Node, Scheme, SchemeError, Vfs};
+use crate::{PinnedNode, Scheme, SchemeError, Vfs};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use url::Url;
@@ -212,7 +212,7 @@ impl Scheme for SymLinkScheme {
 		vfs: &Vfs,
 		url: &'a Url,
 		options: &NodeGetOptions,
-	) -> Result<Box<dyn Node>, SchemeError<'a>> {
+	) -> Result<PinnedNode, SchemeError<'a>> {
 		let url = self.get_symlink_dest(url)?;
 		let fut = vfs.get_node(&url, options);
 		// Split the `await` from the `fut` so `url` can drop or else lifetime annoyance
@@ -308,13 +308,7 @@ mod async_tokio_tests {
 			.await
 			.unwrap();
 		let mut buffer = String::new();
-		test_node
-			.read()
-			.await
-			.unwrap()
-			.read_to_string(&mut buffer)
-			.await
-			.unwrap();
+		test_node.read_to_string(&mut buffer).await.unwrap();
 		buffer
 	}
 

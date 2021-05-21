@@ -1,9 +1,13 @@
+use crate::node::IsAllowed;
 use crate::scheme::{NodeEntry, NodeGetOptions, NodeMetadata, ReadDirStream};
-use crate::{Node, Scheme, SchemeError, Vfs};
+use crate::{Node, PinnedNode, Scheme, SchemeError, Vfs};
 use async_std::fs::OpenOptions;
 use futures_lite::{AsyncRead, AsyncSeek, AsyncWrite, StreamExt};
 use std::borrow::Cow;
+use std::io::{IoSlice, IoSliceMut, SeekFrom};
 use std::path::PathBuf;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use url::Url;
 
 #[derive(Debug)]
@@ -58,7 +62,7 @@ impl Scheme for AsyncStdFileSystemScheme {
 		_vfs: &Vfs,
 		url: &'a Url,
 		options: &NodeGetOptions,
-	) -> Result<Box<dyn Node>, SchemeError<'a>> {
+	) -> Result<PinnedNode, SchemeError<'a>> {
 		let path = self.fs_path_from_url(url)?;
 		if options.get_create() {
 			let parent_path = path
@@ -75,7 +79,7 @@ impl Scheme for AsyncStdFileSystemScheme {
 			read: options.get_read(),
 			write: options.get_write(),
 		};
-		Ok(Box::new(node))
+		Ok(Box::pin(node))
 	}
 
 	async fn remove_node<'a>(
@@ -154,28 +158,99 @@ pub struct AsyncStdFileSystemNode {
 
 #[async_trait::async_trait]
 impl Node for AsyncStdFileSystemNode {
-	async fn read<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncRead + Unpin)> {
-		if self.read {
-			Some(&mut self.file)
-		} else {
-			None
-		}
+	fn is_reader(&self) -> bool {
+		self.read
 	}
 
-	async fn write<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncWrite + Unpin)> {
-		if self.write {
-			Some(&mut self.file)
-		} else {
-			None
-		}
+	fn is_writer(&self) -> bool {
+		self.write
 	}
 
-	async fn seek<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncSeek + Unpin)> {
-		if self.read || self.write {
-			Some(&mut self.file)
-		} else {
-			None
-		}
+	fn is_seeker(&self) -> bool {
+		self.read || self.write
+	}
+	// async fn read<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncRead + Unpin)> {
+	// 	if self.read {
+	// 		Some(&mut self.file)
+	// 	} else {
+	// 		None
+	// 	}
+	// }
+	//
+	// async fn write<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncWrite + Unpin)> {
+	// 	if self.write {
+	// 		Some(&mut self.file)
+	// 	} else {
+	// 		None
+	// 	}
+	// }
+	//
+	// async fn seek<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncSeek + Unpin)> {
+	// 	if self.read || self.write {
+	// 		Some(&mut self.file)
+	// 	} else {
+	// 		None
+	// 	}
+	// }
+}
+
+impl AsyncRead for AsyncStdFileSystemNode {
+	fn poll_read(
+		self: Pin<&mut Self>,
+		cx: &mut Context<'_>,
+		buf: &mut [u8],
+	) -> Poll<std::io::Result<usize>> {
+		self.read
+			.into_poll_io_then(|| Pin::new(&mut self.get_mut().file).poll_read(cx, buf))
+	}
+
+	fn poll_read_vectored(
+		self: Pin<&mut Self>,
+		cx: &mut Context<'_>,
+		bufs: &mut [IoSliceMut<'_>],
+	) -> Poll<std::io::Result<usize>> {
+		self.read
+			.into_poll_io_then(|| Pin::new(&mut self.get_mut().file).poll_read_vectored(cx, bufs))
+	}
+}
+
+impl AsyncWrite for AsyncStdFileSystemNode {
+	fn poll_write(
+		self: Pin<&mut Self>,
+		cx: &mut Context<'_>,
+		buf: &[u8],
+	) -> Poll<std::io::Result<usize>> {
+		self.write
+			.into_poll_io_then(|| Pin::new(&mut self.get_mut().file).poll_write(cx, buf))
+	}
+
+	fn poll_write_vectored(
+		self: Pin<&mut Self>,
+		cx: &mut Context<'_>,
+		bufs: &[IoSlice<'_>],
+	) -> Poll<std::io::Result<usize>> {
+		self.write
+			.into_poll_io_then(|| Pin::new(&mut self.get_mut().file).poll_write_vectored(cx, bufs))
+	}
+
+	fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+		self.write
+			.into_poll_io_then(|| Pin::new(&mut self.get_mut().file).poll_flush(cx))
+	}
+
+	fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+		Pin::new(&mut self.get_mut().file).poll_close(cx)
+	}
+}
+
+impl AsyncSeek for AsyncStdFileSystemNode {
+	fn poll_seek(
+		self: Pin<&mut Self>,
+		cx: &mut Context<'_>,
+		pos: SeekFrom,
+	) -> Poll<std::io::Result<u64>> {
+		(self.read || self.write)
+			.into_poll_io_then(|| Pin::new(&mut self.get_mut().file).poll_seek(cx, pos))
 	}
 }
 
@@ -236,12 +311,7 @@ mod tests_general {
 			.await
 			.unwrap();
 		let mut buffer = String::new();
-		node.read()
-			.await
-			.unwrap()
-			.read_to_string(&mut buffer)
-			.await
-			.unwrap();
+		node.read_to_string(&mut buffer).await.unwrap();
 		assert!(buffer.starts_with("[package]"));
 	}
 
@@ -265,19 +335,14 @@ mod tests_general {
 			)
 			.await
 			.unwrap();
-		let writer = node.write().await.unwrap();
-		writer
-			.write_all(FILE_TEST_CONTENT.as_bytes())
-			.await
-			.unwrap();
-		writer.flush().await.unwrap();
+		node.write_all(FILE_TEST_CONTENT.as_bytes()).await.unwrap();
+		node.flush().await.unwrap();
 		let mut node = vfs
 			.get_node(&u(FILE_CONTENT_TEST_LOC), &NodeGetOptions::new().read(true))
 			.await
 			.unwrap();
-		let reader = node.read().await.unwrap();
 		let mut buffer = String::new();
-		reader.read_to_string(&mut buffer).await.unwrap();
+		node.read_to_string(&mut buffer).await.unwrap();
 		vfs.remove_node(&u(FILE_CONTENT_TEST_LOC), false)
 			.await
 			.unwrap();
@@ -304,23 +369,13 @@ mod tests_general {
 			)
 			.await
 			.unwrap();
-		let writer = node.write().await.unwrap();
-		writer
-			.write_all(FILE_TEST_CONTENT.as_bytes())
-			.await
-			.unwrap();
+		node.write_all(FILE_TEST_CONTENT.as_bytes()).await.unwrap();
 		// Always be sure to flush before seeking if any writes were performed, not necessary for
 		// async_std, but it is for tokio, and it's good form anyway when seeking.
-		writer.flush().await.unwrap();
-		node.seek()
-			.await
-			.unwrap()
-			.seek(SeekFrom::Start(0))
-			.await
-			.unwrap();
-		let reader = node.read().await.unwrap();
+		node.flush().await.unwrap();
+		node.seek(SeekFrom::Start(0)).await.unwrap();
 		let mut buffer = String::new();
-		reader.read_to_string(&mut buffer).await.unwrap();
+		node.read_to_string(&mut buffer).await.unwrap();
 		vfs.remove_node(&u(FILE_CONTENT_SEEK_TEST_LOC), false)
 			.await
 			.unwrap();

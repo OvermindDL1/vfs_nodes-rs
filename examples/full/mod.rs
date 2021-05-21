@@ -1,4 +1,3 @@
-use anyhow::Context;
 use futures_lite::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, StreamExt};
 use std::io::SeekFrom;
 use std::path::PathBuf;
@@ -105,28 +104,20 @@ take time.\n");
 it it that we are at since data nodes support seeks.  Notice we have to await on the 'access'
 first before we can perform the action as this itself can also be a request depending on the
 scheme being accessed\n");
-	let cur_pos = node
-		.seek()
-		.await
-		.context("unsupported")? // `context` is just part of `anyhow` error reporting, ignore it
-		.seek(SeekFrom::Current(0))
-		.await?;
+	let cur_pos = node.seek(SeekFrom::Current(0)).await?;
 	assert_eq!(
 		cur_pos, 0,
 		"The data scheme starts at position 0 by default"
 	);
 
 	println!("Let's see what data it contains:\n");
-	node.read()
-		.await
-		.context("unsupported")?
-		.read_to_string(buffer)
-		.await?;
+	node.read_to_string(buffer).await?;
 	assert_eq!(buffer, "test string");
 	buffer.clear(); // Normal read stuff, reset your buffer when done with it before the next read.
 
 	println!("We can't write to a data node though!\n");
-	assert!(node.write().await.is_none());
+	assert!(!node.is_writer());
+	assert!(node.write_all("blah".as_bytes()).await.is_err());
 
 	println!(
 		"But we can write to a memory storage by default, so let's get a node read and write!  We need
@@ -135,35 +126,19 @@ if we want to \"only\" create it and fail if it doesn't exist, as per normal `st
 	let mut node = vfs.get_node_at("mem:/testing", create_read_write).await?;
 
 	println!("Well it's empty, so let's write to it:\n");
-	node.write()
-		.await
-		.context("unsupported")?
-		.write_all("test string".as_bytes())
-		.await?;
+	node.write_all("test string".as_bytes()).await?;
 
 	println!("And let's read it back:\n");
-	node.read()
-		.await
-		.context("unsupported")?
-		.read_to_string(buffer)
-		.await?;
+	node.read_to_string(buffer).await?;
 	assert_eq!(buffer, "");
 	buffer.clear();
 	println!(
 		"Oh no, it's empty!  Just like when writing a standard file it leaves the cursor where you
 wrote so let's move it back to the beginning:\n"
 	);
-	node.seek()
-		.await
-		.context("unsupported")?
-		.seek(SeekFrom::Start(0))
-		.await?;
+	node.seek(SeekFrom::Start(0)).await?;
 	println!("And read it now\n");
-	node.read()
-		.await
-		.context("unsupported")?
-		.read_to_string(buffer)
-		.await?;
+	node.read_to_string(buffer).await?;
 	assert_eq!(buffer, "test string");
 	buffer.clear();
 	println!(
@@ -171,9 +146,6 @@ wrote so let's move it back to the beginning:\n"
 	);
 	vfs.get_node_at("mem:/testing", read)
 		.await?
-		.read()
-		.await
-		.context("unsupported")?
 		.read_to_string(buffer)
 		.await?;
 	assert_eq!(buffer, "test string");
@@ -193,12 +165,10 @@ example run was run, but we'll ignore that) so let's create a new file:\n");
 	let mut node = vfs.get_node_at("fs:/test.txt", create_read_write).await?;
 
 	println!("Let's write data to it:\n");
-	let writer = node.write().await.context("unsupported")?;
-	writer
-		.write_all("A string inside the file".as_bytes())
+	node.write_all("A string inside the file".as_bytes())
 		.await?;
 	println!("Standard filesystem stuff, don't forget to flush if you are reading it back anytime soon (do it anyway)!\n");
-	writer.flush().await?;
+	node.flush().await?;
 	println!(
 		"Feel free to go look at {:?} file to see the data written to it.\n",
 		root_path.join("fs/test.txt").as_os_str()
@@ -207,37 +177,29 @@ example run was run, but we'll ignore that) so let's create a new file:\n");
 	println!("Same thing works in the overlay as well.\n");
 	let mut node = vfs.get_node_at("overlay:/test.txt", read).await?;
 	println!("And we can read that file back:\n");
-	node.read()
-		.await
-		.context("unsupported")?
-		.read_to_string(buffer)
-		.await?;
+	node.read_to_string(buffer).await?;
 	assert_eq!(buffer, "A string inside the file");
 	buffer.clear();
 
 	println!("We can't write to the file though:");
-	assert!(node.write().await.is_none());
+	assert!(!node.is_writer());
+	assert!(node.write_all("blah".as_bytes()).await.is_err());
 
 	println!("Well let's change the access to write so we can write to it:\n");
 	assert!(vfs.get_node_at("overlay:/test.txt", write).await.is_err());
 	println!(
-		"But it doesn't exist writeably!  Remember it's an overlay filesystem, and we only have\
+		"But it doesn't exist writeably!  Remember it's an overlay filesystem, and we only have
 write access into `fs/overlay_rw`, so let's create a test.txt file there then:\n"
 	);
 	let mut node = vfs
 		.get_node_at("overlay:/test.txt", create_read_write)
 		.await?;
 	println!("And let's write to it:\n");
-	let writer = node.write().await.context("unsupported")?;
-	writer.write_all("A different file".as_bytes()).await?;
-	writer.flush().await?;
+	node.write_all("A different file".as_bytes()).await?;
+	node.flush().await?;
 	println!("and now let's read that file back, we'll even re-open it as read-only to see which we get:\n");
 	let mut node = vfs.get_node_at("overlay:/test.txt", read).await?;
-	node.read()
-		.await
-		.context("unsupported")?
-		.read_to_string(buffer)
-		.await?;
+	node.read_to_string(buffer).await?;
 	assert_eq!(buffer, "A different file");
 	buffer.clear();
 	println!(
@@ -247,11 +209,7 @@ a subdirectory of the read-only fs, so we can read the file from there too:\n"
 	let mut node = vfs
 		.get_node_at("overlay:/overlay_rw/test.txt", read)
 		.await?;
-	node.read()
-		.await
-		.context("unsupported")?
-		.read_to_string(buffer)
-		.await?;
+	node.read_to_string(buffer).await?;
 	assert_eq!(buffer, "A different file");
 	buffer.clear();
 	println!("And indeed, it is that same `different` file!\n");
@@ -272,9 +230,6 @@ a subdirectory of the read-only fs, so we can read the file from there too:\n"
 	assert!(vfs.get_node_at("embed:/nothing/here", read).await.is_err());
 	vfs.get_node_at("embed:/full_tokio.rs", read)
 		.await?
-		.read()
-		.await
-		.context("unsupported")?
 		.read_to_string(buffer)
 		.await?;
 	assert!(buffer.contains("main"));

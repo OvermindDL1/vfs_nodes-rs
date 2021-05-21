@@ -1,5 +1,5 @@
 use crate::scheme::{NodeEntry, NodeGetOptions, NodeMetadata, ReadDirStream};
-use crate::{Node, Scheme, SchemeError, Vfs};
+use crate::{Node, PinnedNode, Scheme, SchemeError, Vfs};
 use dashmap::DashMap;
 use futures_lite::{AsyncRead, AsyncSeek, AsyncWrite, Stream};
 use std::borrow::Cow;
@@ -29,7 +29,7 @@ impl Scheme for MemoryScheme {
 		_vfs: &Vfs,
 		url: &'a Url,
 		options: &NodeGetOptions,
-	) -> Result<Box<dyn Node>, SchemeError<'a>> {
+	) -> Result<PinnedNode, SchemeError<'a>> {
 		let path = Path::new(url.path());
 		let data = if let Some(data) = self.storage.get(path) {
 			if options.get_create_new() {
@@ -61,7 +61,7 @@ impl Scheme for MemoryScheme {
 			read: options.get_read(),
 			write: options.get_write(),
 		};
-		Ok(Box::new(node))
+		Ok(Box::pin(node))
 	}
 
 	async fn remove_node<'a>(
@@ -167,29 +167,40 @@ pub struct MemoryNode {
 
 #[async_trait::async_trait]
 impl Node for MemoryNode {
-	async fn read<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncRead + Unpin)> {
-		if self.read {
-			Some(self)
-		} else {
-			None
-		}
+	fn is_reader(&self) -> bool {
+		self.read
 	}
 
-	async fn write<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncWrite + Unpin)> {
-		if self.write {
-			Some(self)
-		} else {
-			None
-		}
+	fn is_writer(&self) -> bool {
+		self.write
 	}
 
-	async fn seek<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncSeek + Unpin)> {
-		if self.read || self.write {
-			Some(self)
-		} else {
-			None
-		}
+	fn is_seeker(&self) -> bool {
+		self.read || self.write
 	}
+	// async fn read<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncRead + Unpin)> {
+	// 	if self.read {
+	// 		Some(self)
+	// 	} else {
+	// 		None
+	// 	}
+	// }
+	//
+	// async fn write<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncWrite + Unpin)> {
+	// 	if self.write {
+	// 		Some(self)
+	// 	} else {
+	// 		None
+	// 	}
+	// }
+	//
+	// async fn seek<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncSeek + Unpin)> {
+	// 	if self.read || self.write {
+	// 		Some(self)
+	// 	} else {
+	// 		None
+	// 	}
+	// }
 }
 
 impl AsyncRead for MemoryNode {
@@ -352,12 +363,7 @@ mod async_tokio_tests {
 			.await
 			.unwrap();
 		let mut buffer = String::new();
-		node.read()
-			.await
-			.unwrap()
-			.read_to_string(&mut buffer)
-			.await
-			.unwrap();
+		node.read_to_string(&mut buffer).await.unwrap();
 		assert_eq!(&buffer, "");
 	}
 
@@ -375,25 +381,10 @@ mod async_tokio_tests {
 			)
 			.await
 			.unwrap();
-		node.write()
-			.await
-			.unwrap()
-			.write_all("test string".as_bytes())
-			.await
-			.unwrap();
-		node.seek()
-			.await
-			.unwrap()
-			.seek(SeekFrom::Start(0))
-			.await
-			.unwrap();
+		node.write_all("test string".as_bytes()).await.unwrap();
+		node.seek(SeekFrom::Start(0)).await.unwrap();
 		let mut buffer = String::new();
-		node.read()
-			.await
-			.unwrap()
-			.read_to_string(&mut buffer)
-			.await
-			.unwrap();
+		node.read_to_string(&mut buffer).await.unwrap();
 		assert_eq!(&buffer, "test string");
 	}
 
@@ -412,25 +403,10 @@ mod async_tokio_tests {
 				)
 				.await
 				.unwrap();
-			node.write()
-				.await
-				.unwrap()
-				.write_all("test string".as_bytes())
-				.await
-				.unwrap();
-			node.seek()
-				.await
-				.unwrap()
-				.seek(SeekFrom::Start(0))
-				.await
-				.unwrap();
+			node.write_all("test string".as_bytes()).await.unwrap();
+			node.seek(SeekFrom::Start(0)).await.unwrap();
 			let mut buffer = String::new();
-			node.read()
-				.await
-				.unwrap()
-				.read_to_string(&mut buffer)
-				.await
-				.unwrap();
+			node.read_to_string(&mut buffer).await.unwrap();
 			assert_eq!(&buffer, "test string");
 		}
 		{
@@ -439,12 +415,7 @@ mod async_tokio_tests {
 				.await
 				.unwrap();
 			let mut buffer = String::new();
-			node.read()
-				.await
-				.unwrap()
-				.read_to_string(&mut buffer)
-				.await
-				.unwrap();
+			node.read_to_string(&mut buffer).await.unwrap();
 			assert_eq!(&buffer, "test string");
 		}
 	}
@@ -463,39 +434,14 @@ mod async_tokio_tests {
 			)
 			.await
 			.unwrap();
-		node.write()
-			.await
-			.unwrap()
-			.write_all("test".as_bytes())
-			.await
-			.unwrap();
-		node.seek()
-			.await
-			.unwrap()
-			.seek(SeekFrom::Start(0))
-			.await
-			.unwrap();
+		node.write_all("test".as_bytes()).await.unwrap();
+		node.seek(SeekFrom::Start(0)).await.unwrap();
 		let mut buffer = String::new();
-		node.read()
-			.await
-			.unwrap()
-			.read_to_string(&mut buffer)
-			.await
-			.unwrap();
+		node.read_to_string(&mut buffer).await.unwrap();
 		assert_eq!(&buffer, "test");
 		buffer.clear();
-		node.seek()
-			.await
-			.unwrap()
-			.seek(SeekFrom::Start(2))
-			.await
-			.unwrap();
-		node.read()
-			.await
-			.unwrap()
-			.read_to_string(&mut buffer)
-			.await
-			.unwrap();
+		node.seek(SeekFrom::Start(2)).await.unwrap();
+		node.read_to_string(&mut buffer).await.unwrap();
 		assert_eq!(&buffer, "st");
 	}
 	#[tokio::test]

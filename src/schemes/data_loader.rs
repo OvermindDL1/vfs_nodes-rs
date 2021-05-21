@@ -1,5 +1,6 @@
+use crate::node::poll_io_err;
 use crate::scheme::{NodeGetOptions, NodeMetadata, ReadDirStream};
-use crate::{Node, Scheme, SchemeError, Vfs};
+use crate::{Node, PinnedNode, Scheme, SchemeError, Vfs};
 use futures_lite::{AsyncRead, AsyncSeek, AsyncWrite};
 use std::borrow::Cow;
 use std::io::SeekFrom;
@@ -53,14 +54,14 @@ impl Scheme for DataLoaderScheme {
 		_vfs: &Vfs,
 		url: &'a Url,
 		_options: &NodeGetOptions,
-	) -> Result<Box<dyn Node>, SchemeError<'a>> {
+	) -> Result<PinnedNode, SchemeError<'a>> {
 		let (_mimetype, data) = Self::parse_url_into_data(url)?;
 		let node = DataLoaderNode {
 			data,
 			cursor: 0,
 			//mimetype: mimetype.to_owned(),
 		};
-		Ok(Box::new(node))
+		Ok(Box::pin(node))
 	}
 
 	async fn remove_node<'a>(
@@ -101,26 +102,28 @@ pub struct DataLoaderNode {
 
 #[async_trait::async_trait]
 impl Node for DataLoaderNode {
-	async fn read<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncRead + Unpin)> {
-		Some(self)
+	fn is_reader(&self) -> bool {
+		true
 	}
 
-	async fn write<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncWrite + Unpin)> {
-		None
+	fn is_writer(&self) -> bool {
+		false
 	}
 
-	// async fn read_write<'s>(
-	// 	&'s mut self,
-	// ) -> Option<(
-	// 	ReadHalf<&'s mut dyn AsyncReadWriteUnpin>,
-	// 	WriteHalf<&'s mut dyn AsyncReadWriteUnpin>,
-	// )> {
+	fn is_seeker(&self) -> bool {
+		true
+	}
+	// async fn read<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncRead + Unpin)> {
+	// 	Some(self)
+	// }
+	//
+	// async fn write<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncWrite + Unpin)> {
 	// 	None
 	// }
-
-	async fn seek<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncSeek + Unpin)> {
-		Some(self)
-	}
+	//
+	// async fn seek<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncSeek + Unpin)> {
+	// 	Some(self)
+	// }
 }
 
 impl AsyncRead for DataLoaderNode {
@@ -138,6 +141,24 @@ impl AsyncRead for DataLoaderNode {
 		self.cursor += amt;
 
 		Poll::Ready(Ok(amt))
+	}
+}
+
+impl AsyncWrite for DataLoaderNode {
+	fn poll_write(
+		self: Pin<&mut Self>,
+		_cx: &mut Context<'_>,
+		_buf: &[u8],
+	) -> Poll<std::io::Result<usize>> {
+		poll_io_err()
+	}
+
+	fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+		poll_io_err()
+	}
+
+	fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+		poll_io_err()
 	}
 }
 
@@ -226,13 +247,7 @@ mod async_tokio_tests {
 			.await
 			.unwrap();
 		let mut buffer = String::new();
-		test_node
-			.read()
-			.await
-			.unwrap()
-			.read_to_string(&mut buffer)
-			.await
-			.unwrap();
+		test_node.read_to_string(&mut buffer).await.unwrap();
 		assert_eq!(&buffer, "test")
 	}
 
@@ -244,36 +259,21 @@ mod async_tokio_tests {
 			.await
 			.unwrap();
 		let mut buffer = String::new();
-		node.read()
-			.await
-			.unwrap()
-			.read_to_string(&mut buffer)
-			.await
-			.unwrap();
+		node.read_to_string(&mut buffer).await.unwrap();
 		assert_eq!(&buffer, "test");
-		node.seek()
-			.await
-			.unwrap()
-			.seek(SeekFrom::Start(2))
-			.await
-			.unwrap();
+		node.seek(SeekFrom::Start(2)).await.unwrap();
 		buffer.clear();
-		node.read()
-			.await
-			.unwrap()
-			.read_to_string(&mut buffer)
-			.await
-			.unwrap();
+		node.read_to_string(&mut buffer).await.unwrap();
 		assert_eq!(&buffer, "st");
 	}
 
 	#[tokio::test]
 	async fn node_writing() {
 		let vfs = Vfs::default();
-		let mut node = vfs
+		let node = vfs
 			.get_node(&u("data:test"), &NodeGetOptions::new().read(true))
 			.await
 			.unwrap();
-		assert!(node.write().await.is_none());
+		assert!(!node.is_writer());
 	}
 }

@@ -1,5 +1,6 @@
+use crate::node::poll_io_err;
 use crate::scheme::{NodeEntry, NodeGetOptions, NodeMetadata, ReadDirStream};
-use crate::{Node, Scheme, SchemeError, Vfs};
+use crate::{Node, PinnedNode, Scheme, SchemeError, Vfs};
 use futures_lite::{AsyncRead, AsyncSeek, AsyncWrite, Stream};
 use rust_embed::RustEmbed;
 use std::borrow::Cow;
@@ -35,13 +36,13 @@ impl<Embed: RustEmbed + Send + Sync + 'static> Scheme for EmbeddedScheme<Embed> 
 		_vfs: &Vfs,
 		url: &'a Url,
 		options: &NodeGetOptions,
-	) -> Result<Box<dyn Node>, SchemeError<'a>> {
+	) -> Result<PinnedNode, SchemeError<'a>> {
 		if url.path().is_empty() {
 			return Err(SchemeError::NodeDoesNotExist(Cow::Borrowed(url.path())));
 		}
 		if options.get_read() {
 			if let Some(data) = Embed::get(&url.path()[1..]) {
-				Ok(Box::new(EmbeddedNode { data, cursor: 0 }))
+				Ok(Box::pin(EmbeddedNode { data, cursor: 0 }))
 			} else {
 				Err(SchemeError::NodeDoesNotExist(Cow::Borrowed(url.path())))
 			}
@@ -142,17 +143,28 @@ pub struct EmbeddedNode {
 
 #[async_trait::async_trait]
 impl Node for EmbeddedNode {
-	async fn read<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncRead + Unpin)> {
-		Some(self)
+	fn is_reader(&self) -> bool {
+		true
 	}
 
-	async fn write<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncWrite + Unpin)> {
-		None
+	fn is_writer(&self) -> bool {
+		false
 	}
 
-	async fn seek<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncSeek + Unpin)> {
-		Some(self)
+	fn is_seeker(&self) -> bool {
+		true
 	}
+	// async fn read<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncRead + Unpin)> {
+	// 	Some(self)
+	// }
+	//
+	// async fn write<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncWrite + Unpin)> {
+	// 	None
+	// }
+	//
+	// async fn seek<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncSeek + Unpin)> {
+	// 	Some(self)
+	// }
 }
 
 impl AsyncRead for EmbeddedNode {
@@ -170,6 +182,24 @@ impl AsyncRead for EmbeddedNode {
 		self.cursor += amt;
 
 		Poll::Ready(Ok(amt))
+	}
+}
+
+impl AsyncWrite for EmbeddedNode {
+	fn poll_write(
+		self: Pin<&mut Self>,
+		_cx: &mut Context<'_>,
+		_buf: &[u8],
+	) -> Poll<std::io::Result<usize>> {
+		poll_io_err()
+	}
+
+	fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+		poll_io_err()
+	}
+
+	fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+		poll_io_err()
 	}
 }
 
@@ -239,9 +269,6 @@ mod async_tokio_tests {
 		vfs.get_node(&u("embed:/full_tokio.rs"), read)
 			.await
 			.unwrap()
-			.read()
-			.await
-			.unwrap()
 			.read_to_string(buffer)
 			.await
 			.unwrap();
@@ -260,26 +287,11 @@ mod async_tokio_tests {
 			.await
 			.unwrap();
 		let mut buffer = String::new();
-		node.read()
-			.await
-			.unwrap()
-			.read_to_string(&mut buffer)
-			.await
-			.unwrap();
+		node.read_to_string(&mut buffer).await.unwrap();
 		assert!(buffer.contains("main"));
-		node.seek()
-			.await
-			.unwrap()
-			.seek(SeekFrom::End(2))
-			.await
-			.unwrap();
+		node.seek(SeekFrom::End(2)).await.unwrap();
 		buffer.clear();
-		node.read()
-			.await
-			.unwrap()
-			.read_to_string(&mut buffer)
-			.await
-			.unwrap();
+		node.read_to_string(&mut buffer).await.unwrap();
 		assert!(!buffer.contains("main"));
 	}
 

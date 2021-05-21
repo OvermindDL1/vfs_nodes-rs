@@ -1,5 +1,6 @@
+use crate::node::IsAllowed;
 use crate::scheme::{NodeEntry, NodeGetOptions, NodeMetadata, ReadDirStream};
-use crate::{Node, Scheme, SchemeError, Vfs};
+use crate::{Node, PinnedNode, Scheme, SchemeError, Vfs};
 use futures_lite::{ready, AsyncRead, AsyncSeek, AsyncWrite, Stream};
 use std::borrow::Cow;
 use std::io::{IoSlice, SeekFrom};
@@ -63,7 +64,7 @@ impl Scheme for TokioFileSystemScheme {
 		_vfs: &Vfs,
 		url: &'a Url,
 		options: &NodeGetOptions,
-	) -> Result<Box<dyn Node>, SchemeError<'a>> {
+	) -> Result<PinnedNode, SchemeError<'a>> {
 		let path = self.fs_path_from_url(url)?;
 		if options.get_create() {
 			let parent_path = path
@@ -78,7 +79,7 @@ impl Scheme for TokioFileSystemScheme {
 			read: options.get_read(),
 			write: options.get_write(),
 		};
-		Ok(Box::new(node))
+		Ok(Box::pin(node))
 	}
 
 	async fn remove_node<'a>(
@@ -172,29 +173,40 @@ pub struct TokioFileSystemNode {
 
 #[async_trait::async_trait]
 impl Node for TokioFileSystemNode {
-	async fn read<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncRead + Unpin)> {
-		if self.read {
-			Some(self)
-		} else {
-			None
-		}
+	fn is_reader(&self) -> bool {
+		self.read
 	}
 
-	async fn write<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncWrite + Unpin)> {
-		if self.write {
-			Some(self)
-		} else {
-			None
-		}
+	fn is_writer(&self) -> bool {
+		self.write
 	}
 
-	async fn seek<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncSeek + Unpin)> {
-		if self.read || self.write {
-			Some(self)
-		} else {
-			None
-		}
+	fn is_seeker(&self) -> bool {
+		self.read || self.write
 	}
+	// async fn read<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncRead + Unpin)> {
+	// 	if self.read {
+	// 		Some(self)
+	// 	} else {
+	// 		None
+	// 	}
+	// }
+	//
+	// async fn write<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncWrite + Unpin)> {
+	// 	if self.write {
+	// 		Some(self)
+	// 	} else {
+	// 		None
+	// 	}
+	// }
+	//
+	// async fn seek<'s>(&'s mut self) -> Option<&'s mut (dyn AsyncSeek + Unpin)> {
+	// 	if self.read || self.write {
+	// 		Some(self)
+	// 	} else {
+	// 		None
+	// 	}
+	// }
 }
 
 impl AsyncRead for TokioFileSystemNode {
@@ -203,30 +215,16 @@ impl AsyncRead for TokioFileSystemNode {
 		cx: &mut Context<'_>,
 		buf: &mut [u8],
 	) -> Poll<std::io::Result<usize>> {
-		let mut buf = tokio::io::ReadBuf::new(buf);
-		{
-			let file = Pin::new(&mut self.file);
-			ready!(tokio::io::AsyncRead::poll_read(file, cx, &mut buf))?;
-		}
-		Poll::Ready(Ok(buf.filled().len()))
+		self.read.into_poll_io_then(|| {
+			let mut buf = tokio::io::ReadBuf::new(buf);
+			{
+				let file = Pin::new(&mut self.file);
+				ready!(tokio::io::AsyncRead::poll_read(file, cx, &mut buf))?;
+			}
+			Poll::Ready(Ok(buf.filled().len()))
+		})
 	}
 }
-
-// Tokio's file does not implement AsyncBufRead
-// impl AsyncBufRead for TokioFileSystemNode {
-// 	fn poll_fill_buf(
-// 		mut self: Pin<&mut Self>,
-// 		cx: &mut Context<'_>,
-// 	) -> Poll<std::io::Result<&[u8]>> {
-//		let file = Pin::new(&mut self.file);
-// 		tokio::io::AsyncBufRead::poll_fill_buf(file, cx)
-// 	}
-//
-// 	fn consume(mut self: Pin<&mut Self>, amt: usize) {
-//		let file = Pin::new(&mut self.file);
-// 		tokio::io::AsyncBufRead::consume(amt)
-// 	}
-// }
 
 impl AsyncWrite for TokioFileSystemNode {
 	fn poll_write(
@@ -234,8 +232,10 @@ impl AsyncWrite for TokioFileSystemNode {
 		cx: &mut Context<'_>,
 		buf: &[u8],
 	) -> Poll<std::io::Result<usize>> {
-		let file = Pin::new(&mut self.file);
-		tokio::io::AsyncWrite::poll_write(file, cx, buf)
+		self.write.into_poll_io_then(|| {
+			let file = Pin::new(&mut self.file);
+			tokio::io::AsyncWrite::poll_write(file, cx, buf)
+		})
 	}
 
 	fn poll_write_vectored(
@@ -243,13 +243,17 @@ impl AsyncWrite for TokioFileSystemNode {
 		cx: &mut Context<'_>,
 		bufs: &[IoSlice<'_>],
 	) -> Poll<std::io::Result<usize>> {
-		let file = Pin::new(&mut self.file);
-		tokio::io::AsyncWrite::poll_write_vectored(file, cx, bufs)
+		self.write.into_poll_io_then(|| {
+			let file = Pin::new(&mut self.file);
+			tokio::io::AsyncWrite::poll_write_vectored(file, cx, bufs)
+		})
 	}
 
 	fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-		let file = Pin::new(&mut self.file);
-		tokio::io::AsyncWrite::poll_flush(file, cx)
+		self.write.into_poll_io_then(|| {
+			let file = Pin::new(&mut self.file);
+			tokio::io::AsyncWrite::poll_flush(file, cx)
+		})
 	}
 
 	fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
@@ -264,19 +268,21 @@ impl AsyncSeek for TokioFileSystemNode {
 		cx: &mut Context<'_>,
 		pos: SeekFrom,
 	) -> Poll<std::io::Result<u64>> {
-		if self.seek != Some(pos) {
-			{
-				let file = Pin::new(&mut self.file);
-				tokio::io::AsyncSeek::start_seek(file, pos)?;
+		(self.read || self.write).into_poll_io_then(|| {
+			if self.seek != Some(pos) {
+				{
+					let file = Pin::new(&mut self.file);
+					tokio::io::AsyncSeek::start_seek(file, pos)?;
+				}
+				self.as_mut().seek = Some(pos);
 			}
-			self.as_mut().seek = Some(pos);
-		}
-		let res = {
-			let file = Pin::new(&mut self.file);
-			ready!(tokio::io::AsyncSeek::poll_complete(file, cx))
-		};
-		self.as_mut().seek = None;
-		Poll::Ready(res.map(|p| p as u64))
+			let res = {
+				let file = Pin::new(&mut self.file);
+				ready!(tokio::io::AsyncSeek::poll_complete(file, cx))
+			};
+			self.as_mut().seek = None;
+			Poll::Ready(res.map(|p| p as u64))
+		})
 	}
 }
 
@@ -337,12 +343,7 @@ mod tests_general {
 			.await
 			.unwrap();
 		let mut buffer = String::new();
-		node.read()
-			.await
-			.unwrap()
-			.read_to_string(&mut buffer)
-			.await
-			.unwrap();
+		node.read_to_string(&mut buffer).await.unwrap();
 		assert!(buffer.starts_with("[package]"));
 	}
 
@@ -366,19 +367,14 @@ mod tests_general {
 			)
 			.await
 			.unwrap();
-		let writer = node.write().await.unwrap();
-		writer
-			.write_all(FILE_TEST_CONTENT.as_bytes())
-			.await
-			.unwrap();
-		writer.flush().await.unwrap();
+		node.write_all(FILE_TEST_CONTENT.as_bytes()).await.unwrap();
+		node.flush().await.unwrap();
 		let mut node = vfs
 			.get_node(&u(FILE_CONTENT_TEST_LOC), &NodeGetOptions::new().read(true))
 			.await
 			.unwrap();
-		let reader = node.read().await.unwrap();
 		let mut buffer = String::new();
-		reader.read_to_string(&mut buffer).await.unwrap();
+		node.read_to_string(&mut buffer).await.unwrap();
 		vfs.remove_node(&u(FILE_CONTENT_TEST_LOC), false)
 			.await
 			.unwrap();
@@ -405,23 +401,13 @@ mod tests_general {
 			)
 			.await
 			.unwrap();
-		let writer = node.write().await.unwrap();
-		writer
-			.write_all(FILE_TEST_CONTENT.as_bytes())
-			.await
-			.unwrap();
+		node.write_all(FILE_TEST_CONTENT.as_bytes()).await.unwrap();
 		// Always be sure to flush before seeking if any writes were performed, not necessary for
 		// async_std, but it is for tokio, and it's good form anyway when seeking.
-		writer.flush().await.unwrap();
-		node.seek()
-			.await
-			.unwrap()
-			.seek(SeekFrom::Start(0))
-			.await
-			.unwrap();
-		let reader = node.read().await.unwrap();
+		node.flush().await.unwrap();
+		node.seek(SeekFrom::Start(0)).await.unwrap();
 		let mut buffer = String::new();
-		reader.read_to_string(&mut buffer).await.unwrap();
+		node.read_to_string(&mut buffer).await.unwrap();
 		vfs.remove_node(&u(FILE_CONTENT_SEEK_TEST_LOC), false)
 			.await
 			.unwrap();

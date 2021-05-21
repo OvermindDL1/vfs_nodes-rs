@@ -151,6 +151,8 @@ impl From<&NodeGetOptions> for tokio::fs::OpenOptions {
 	}
 }
 
+pub type PinnedNode = Pin<Box<dyn Node>>;
+
 #[async_trait::async_trait]
 pub trait Scheme: as_any_cast::AsAnyCast + Sync + 'static {
 	/// Get a node with the requested permission options
@@ -159,7 +161,7 @@ pub trait Scheme: as_any_cast::AsAnyCast + Sync + 'static {
 		vfs: &Vfs,
 		url: &'a Url,
 		options: &NodeGetOptions,
-	) -> Result<Box<dyn Node>, SchemeError<'a>>;
+	) -> Result<PinnedNode, SchemeError<'a>>;
 	/// Request to remove a node, the force option is scheme dependently defined, or ignored.
 	async fn remove_node<'a>(
 		&self,
